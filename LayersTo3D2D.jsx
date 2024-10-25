@@ -1,3 +1,7 @@
+/*
+This script handles 3D switches of all the layers in the comp.
+*/
+
 function makeLayers3DOr2D(whichD) {
 	var activeComp = app.project.activeItem;
 
