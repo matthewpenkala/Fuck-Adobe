@@ -219,7 +219,7 @@
 ["CCompCmd"]
 	"AddLayerMarkerWithDialog" = "(Alt+PadMultiply)"
 	"AddMarker" = "(PadMultiply)"
-	"CenterAnchorToBounds" = "(Ctrl+Alt+HOME)"
+	"CenterAnchorToBounds" = "(Ctrl+Alt+X)(Ctrl+Alt+HOME)"
 	"CenterLayerInView" = "(Ctrl+HOME)"
 	"Clear" = "(D)(D)(D)(Delete)(FwdDel)"
 	"ClearMask" = "(Alt+Delete)(Alt+FwdDel)"
@@ -236,7 +236,7 @@
 	"SetWorkAreaStart" = "(B)"
 	"SetWorkAreaToSelection" = "()"
 	"StretchLayerToFit" = "(Ctrl+Alt+F)"
-	"StretchLayerToFitHorizontal" = "(Ctrl+Alt+X)(Ctrl+Alt+Shift+H)"
+	"StretchLayerToFitHorizontal" = "(Ctrl+Alt+Z)(Ctrl+Alt+Z)()(Ctrl+Alt+Shift+H)"
 	"StretchLayerToFitVertical" = "(Ctrl+Alt+E)(Ctrl+Alt+Shift+G)"
 
 ["CCompCompCmd"]
@@ -447,7 +447,7 @@
 	"PreviewNumpad0NFrames" = "(Alt+Pad0)(Alt+PadInsert)"
 	"PreviewShiftNumpad0" = "(Shift+Pad0)(Shift+PadInsert)"
 	"RevealLayerSource" = "(Ctrl+Shift+R)"
-	"SaveProjectCopyAs" = "(Ctrl+Alt+Z)"
+	"SaveProjectCopyAs" = "()"
 	"SelectFromSelectedLayers" = "()"
 	"ShowConsole" = "(Ctrl+F12)"
 	"ShowDebugMonitor" = "(Ctrl+Shift+9)"
@@ -604,7 +604,7 @@
 	"StopRenderQueue" = "(Ctrl+.)(Esc)"
 
 ["CSwitchboard"]
-	"AddCompToRenderQueue" = "(Ctrl+Shift+M)(Ctrl+Shift+M)(Ctrl+Shift+/)()"
+	"AddCompToRenderQueue" = "(Ctrl+Shift+M)(Ctrl+Shift+M)(Ctrl+Shift+/)"
 	"AddItemToComp" = "(Ctrl+/)"
 	"AddItemToCompReplaceLayer" = "(Ctrl+Alt+/)"
 	"AddItemsToNewComp" = "(Alt+Yen)(Alt+Backslash)"
