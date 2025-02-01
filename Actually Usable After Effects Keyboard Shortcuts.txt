@@ -200,7 +200,7 @@
 
 
 ["** header **"]
-	"major_version" = "106"
+	"major_version" = "107"
 
 ["AE_TopLevelWindow"]
 	"SelectNextTab" = "(Ctrl+Tab)(Alt+Shift+.)"
@@ -218,7 +218,7 @@
 
 ["CCompCmd"]
 	"AddLayerMarkerWithDialog" = "(Alt+PadMultiply)"
-	"AddMarker" = "(PadMultiply)"
+	"AddMarker" = "(Alt+C)(PadMultiply)"
 	"CenterAnchorToBounds" = "(Ctrl+Alt+X)(Ctrl+Alt+HOME)"
 	"CenterLayerInView" = "(Ctrl+HOME)"
 	"Clear" = "(D)(D)(D)(Delete)(FwdDel)"
@@ -236,7 +236,7 @@
 	"SetWorkAreaStart" = "(B)"
 	"SetWorkAreaToSelection" = "()"
 	"StretchLayerToFit" = "(Ctrl+Alt+F)"
-	"StretchLayerToFitHorizontal" = "(Ctrl+Alt+Z)(Ctrl+Alt+Z)()(Ctrl+Alt+Shift+H)"
+	"StretchLayerToFitHorizontal" = "(Ctrl+Alt+D)(Ctrl+Alt+D)(Ctrl+Alt+Shift+H)"
 	"StretchLayerToFitVertical" = "(Ctrl+Alt+E)(Ctrl+Alt+Shift+G)"
 
 ["CCompCompCmd"]
@@ -275,8 +275,8 @@
 	"CompToggleSelectLayer7" = "(Shift+Pad7)"
 	"CompToggleSelectLayer8" = "(Shift+Pad8)"
 	"CompToggleSelectLayer9" = "(Shift+Pad9)"
-	"CompToggleUberAnimatingKeyframes" = "(U)"
-	"CompToggleUberAnimatingKeyframesAddState" = "(Shift+U)"
+	"CompToggleUberAnimatingKeyframes" = "(C)(U)"
+	"CompToggleUberAnimatingKeyframesAddState" = "(Shift+C)(Shift+U)"
 	"CompToggleUberAnimatingKeyframesAndExpressions" = "()"
 	"CompToggleUberAnimatingKeyframesAndExpressionsAddState" = "()"
 	"CompTwirlAnchorPoint" = "(A)"
@@ -447,7 +447,7 @@
 	"PreviewNumpad0NFrames" = "(Alt+Pad0)(Alt+PadInsert)"
 	"PreviewShiftNumpad0" = "(Shift+Pad0)(Shift+PadInsert)"
 	"RevealLayerSource" = "(Ctrl+Shift+R)"
-	"SaveProjectCopyAs" = "()"
+	"SaveProjectCopyAs" = "(Ctrl+Alt+Z)"
 	"SelectFromSelectedLayers" = "()"
 	"ShowConsole" = "(Ctrl+F12)"
 	"ShowDebugMonitor" = "(Ctrl+Shift+9)"
@@ -473,13 +473,13 @@
 	"ToolCameraOrbitToggle" = "(Shift+1)"
 	"ToolCameraPan" = "(2)"
 	"ToolCameraPanToggle" = "(Shift+2)"
-	"ToolCameraToggle" = "(Shift+C)"
+	"ToolCameraToggle" = "()"
 	"ToolHand" = "()"
 	"ToolMagnify" = "()"
 	"ToolMask" = "()"
 	"ToolMaskToggle" = "()"
 	"ToolPaint" = "(Ctrl+B)"
-	"ToolPan" = "(C)(Y)"
+	"ToolPan" = "(Y)"
 	"ToolPen" = "()"
 	"ToolPenToggle" = "(Shift+G)"
 	"ToolPin" = "(Ctrl+P)"
@@ -618,8 +618,8 @@
 	"CloseAll" = "()"
 	"CloseWindow" = "()"
 	"CompSettings" = "(Ctrl+Alt+K)(Ctrl+K)"
-	"CompToggleUberAnimatingKeyframes" = "(U)"
-	"CompToggleUberAnimatingKeyframesAddState" = "(Shift+U)"
+	"CompToggleUberAnimatingKeyframes" = "(C)(U)"
+	"CompToggleUberAnimatingKeyframesAddState" = "(Shift+C)(Shift+U)"
 	"CompToggleUberAnimatingKeyframesAndExpressions" = "()"
 	"CompToggleUberAnimatingKeyframesAndExpressionsAddState" = "()"
 	"CompTrimToWorkArea" = "(Ctrl+Shift+X)"
@@ -641,7 +641,7 @@
 	"EasyEaseOut" = "(Ctrl+Shift+F9)"
 	"EditFileExternally" = "(Ctrl+E)"
 	"EnableTimeRemap" = "(Ctrl+Alt+T)"
-	"ExecuteScript" = "(Ctrl+Alt+D)"
+	"ExecuteScript" = "()"
 	"FilterNone" = "(Ctrl+Shift+E)"
 	"Find" = "(Ctrl+F)"
 	"ForceScanForChangedFootage" = "(Ctrl+Alt+L)"
@@ -690,6 +690,7 @@
 	"OpenLayerSourceWindow" = "(Alt+Enter)"
 	"Orientation" = "(Ctrl+Alt+Shift+R)"
 	"Paste" = "(Ctrl+V)"
+	"PasteReversedKeyframes" = "()"
 	"PrefsGeneral" = "(Ctrl+Alt+;)"
 	"PrevXferMode" = "(Shift+-)"
 	"ProjectSettings" = "(Ctrl+Alt+Shift+K)"
