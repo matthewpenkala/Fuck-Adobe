@@ -1,86 +1,179 @@
 /*
-    Create Nulls From Paths.jsx v.0.6
-    Attach nulls to shape and mask vertices, and vice-versa.
+    Create Nulls From Paths.jsx (v1.2) - Updated, Optimized version
+    -------------------------------------------------------
+    Based on:
+        "Create Nulls From Paths.jsx v.0.6" by Adobe
+        -  Fixes by Rana Hamid
+        -  Enhancements by Pablo Cuello v1.1
 
-    Changes made by Rana Hamid:
-        - Now if you click on any of the buttons,
-        it selects the first Path of the selected layer
-        instead of the annoying error message.
-        - Original error messages have been left as they are.
-
-    Changes 0.6:
-        - Nulls are now created above the selected layer.
-        - Loop optimizations
-
-    Changes 0.5:
-        - wraps it all in an IIFE
-        - fixes call to missing method array.indexOf
+    Consolidation & refactoring by Matthew Penkala (+ LLMs ◔̯ ◔) and updated with robust path selection recursion.
 */
-(function createNullsFromPaths (thisObj) {
-    /* Build UI */
-    function buildUI(thisObj) {
 
+/* Wrap everything in an IIFE */
+(function createNullsFromPaths (thisObj) {
+
+    /* --------------------------------------------------
+       Build UI
+    -------------------------------------------------- */
+    function buildUI(thisObj) {
         var windowTitle = localize("$$$/AE/Script/CreatePathNulls/CreateNullsFromPaths=Create Nulls From Paths");
         var firstButton = localize("$$$/AE/Script/CreatePathNulls/PathPointsToNulls=Points Follow Nulls");
         var secondButton = localize("$$$/AE/Script/CreatePathNulls/NullsToPathPoints=Nulls Follow Points");
         var thirdButton = localize("$$$/AE/Script/CreatePathNulls/TracePath=Trace Path");
-        var win = (thisObj instanceof Panel)? thisObj : new Window('palette', windowTitle);
-            win.spacing = 0;
-            win.margins = 4;
-            var myButtonGroup = win.add ("group");
-                myButtonGroup.spacing = 4;
-                myButtonGroup.margins = 0;
-                myButtonGroup.orientation = "row";
-                win.button1 = myButtonGroup.add ("button", undefined, firstButton);
-                win.button2 = myButtonGroup.add ("button", undefined, secondButton);
-                win.button3 = myButtonGroup.add ("button", undefined, thirdButton);
-                myButtonGroup.alignment = "center";
-                myButtonGroup.alignChildren = "center";
+        var checkRotate = localize("$$$/AE/Script/CreatePathNulls/AddControlsForHandles=Rotate Nulls");
 
-            win.button1.onClick = function(){
-                selectFirstPathProperty();
-                linkPointsToNulls();
-            }
-            win.button2.onClick = function(){
-                selectFirstPathProperty();
-                linkNullsToPoints();
-            }
-            win.button3.onClick = function(){
-                selectFirstPathProperty();
-                tracePath();
-            }
+        var win = (thisObj instanceof Panel) ? thisObj : new Window('palette', windowTitle);
+        win.spacing = 0;
+        win.margins = 8;
+
+        var myButtonGroup = win.add ("group");
+            myButtonGroup.spacing = 4;
+            myButtonGroup.margins = 0;
+            myButtonGroup.orientation = "row";
+            myButtonGroup.alignment = ["center", "top"];
+            myButtonGroup.alignChildren = ["center", "top"];
+
+        var col1 = myButtonGroup.add ("group");
+            col1.orientation = "column";
+        var col2 = myButtonGroup.add ("group");
+            col2.orientation = "column";
+        var col3 = myButtonGroup.add ("group");
+            col3.orientation = "column";
+
+        // Buttons
+        win.button1 = col1.add ("button", undefined, firstButton);
+        win.button2 = col2.add ("button", undefined, secondButton);
+        win.button3 = col3.add ("button", undefined, thirdButton);
+
+        // Checkbox
+        win.checkRotate = col2.add ("checkbox", undefined, checkRotate);
+        win.checkRotate.value = true;
+
+        // Button click handlers
+        win.button1.onClick = function() {
+            selectFirstPathProperty();
+            linkPointsToNulls();
+        };
+        win.button2.onClick = function() {
+            selectFirstPathProperty();
+            linkNullsToPoints();
+        };
+        win.button3.onClick = function() {
+            selectFirstPathProperty();
+            tracePath();
+        };
 
         win.layout.layout(true);
 
-        return win
+        return win;
     }
-
 
     // Show the Panel
     var w = buildUI(thisObj);
-    if (w.toString() == "[object Panel]") {
+    if (w.toString() === "[object Panel]") {
+        // If dockable
         w;
     } else {
         w.show();
     }
 
 
-    /* General functions */
+    /* --------------------------------------------------
+       SELECT FIRST PATH PROPERTY - FIXED
+    -------------------------------------------------- */
+    /**
+     * Recursively search for the first "ADBE Vector Shape" property
+     * within shape contents (any level of nesting).
+     * @param {PropertyGroup} group - The current property group to search.
+     * @return {Boolean} true if a path is found and selected.
+     */
+    function findFirstPathProperty(group) {
+        if (!group || group.numProperties === 0) {
+            return false;
+        }
+        for (var i = 1; i <= group.numProperties; i++) {
+            var p = group.property(i);
+            if (!p) continue;
 
-    function getActiveComp(){
-        var theComp = app.project.activeItem;
-        if (theComp == undefined){
-            var errorMsg = localize("$$$/AE/Script/CreatePathNulls/ErrorNoComp=Error: Please select a composition.");
-            alert(errorMsg);
-            return null
+            // Check if p is a shape path
+            if (p.matchName === "ADBE Vector Shape") {
+                p.selected = true;
+                return true;
+            }
+
+            // If p is another group, search inside it
+            if (
+                p.propertyType === PropertyType.INDEXED_GROUP ||
+                p.propertyType === PropertyType.NAMED_GROUP
+            ) {
+                if (findFirstPathProperty(p)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Finds the first selected shape layer (if any) and attempts to
+     * select its first path property by searching all subgroups.
+     */
+    function selectFirstPathProperty() {
+        var activeComp = app.project.activeItem;
+        if (!activeComp || !(activeComp instanceof CompItem)) {
+            alert("No active composition found.");
+            return;
         }
 
-        return theComp
+        var layers = activeComp.selectedLayers;
+        if (!layers || layers.length === 0) {
+            // You can choose to alert or just silently do nothing
+            // alert("Please select a shape layer first.");
+            return;
+        }
+
+        var foundPath = false;
+        for (var i = 0; i < layers.length; i++) {
+            var layer = layers[i];
+            if (layer.matchName === "ADBE Vector Layer") {
+                var contents = layer.property("ADBE Root Vectors Group");
+                if (!contents) continue;
+
+                // Use the recursive search
+                if (findFirstPathProperty(contents)) {
+                    foundPath = true;
+                    // If you only want the first path in the first shape layer
+                    // then stop; if you want to check *all* selected shape layers,
+                    // remove this `break`.
+                    break;
+                }
+            }
+        }
+
+        if (!foundPath) {
+            // We never found a path in any of the selected shape layers
+            // Possibly because they have no path or are not shape layers
+            // or the shape is empty.
+            alert("Path property not found in the shape layer(s).");
+        }
+    }
+
+
+    /* --------------------------------------------------
+       GENERAL FUNCTIONS
+    -------------------------------------------------- */
+    function getActiveComp(){
+        var theComp = app.project.activeItem;
+        if (!theComp) {
+            var errorMsg = localize("$$$/AE/Script/CreatePathNulls/ErrorNoComp=Error: Please select a composition.");
+            alert(errorMsg);
+            return null;
+        }
+        return theComp;
     }
 
     function getSelectedLayers(targetComp){
-        var targetLayers = targetComp.selectedLayers;
-        return targetLayers
+        return targetComp.selectedLayers;
     }
 
     function createNull(targetComp){
@@ -89,294 +182,295 @@
 
     function getSelectedProperties(targetLayer){
         var props = targetLayer.selectedProperties;
-        if (props.length < 1){
-            return null
-        }
-        return props
+        return (props && props.length > 0) ? props : null;
     }
 
     function forEachLayer(targetLayerArray, doSomething) {
-        for (var i = 0, ii = targetLayerArray.length; i < ii; i++){
+        for (var i = 0; i < targetLayerArray.length; i++){
             doSomething(targetLayerArray[i]);
         }
     }
 
     function forEachProperty(targetProps, doSomething){
-        for (var i = 0, ii = targetProps.length; i < ii; i++){
+        for (var i = 0; i < targetProps.length; i++){
             doSomething(targetProps[i]);
         }
     }
 
     function forEachEffect(targetLayer, doSomething){
-        for (var i = 1, ii = targetLayer.property("ADBE Effect Parade").numProperties; i <= ii; i++) {
-            doSomething(targetLayer.property("ADBE Effect Parade").property(i));
+        var fx = targetLayer.property("ADBE Effect Parade");
+        if (!fx) return;
+        for (var i = 1; i <= fx.numProperties; i++) {
+            doSomething(fx.property(i));
         }
     }
 
-    function matchMatchName(targetEffect,matchNameString){
-        if (targetEffect != null && targetEffect.matchName === matchNameString) {
-            return targetEffect
-        } else {
-            return null
+    function matchMatchName(targetEffect, matchNameString){
+        if (targetEffect && targetEffect.matchName === matchNameString) {
+            return targetEffect;
         }
+        return null;
     }
 
-    function getPropPath(currentProp,pathHierarchy){
+    function getPropPath(currentProp, pathHierarchy){
         var pathPath = "";
-            while (currentProp.parentProperty !== null){
-
-                if ((currentProp.parentProperty.propertyType === PropertyType.INDEXED_GROUP)) {
-                    pathHierarchy.unshift(currentProp.propertyIndex);
-                    pathPath = "(" + currentProp.propertyIndex + ")" + pathPath;
-                } else {
-                    pathPath = "(\"" + currentProp.matchName.toString() + "\")" + pathPath;
-                }
-
-                // Traverse up the property tree
-                currentProp = currentProp.parentProperty;
+        while (currentProp.parentProperty !== null){
+            if (currentProp.parentProperty.propertyType === PropertyType.INDEXED_GROUP) {
+                pathHierarchy.unshift(currentProp.propertyIndex);
+                pathPath = "(" + currentProp.propertyIndex + ")" + pathPath;
+            } else {
+                pathPath = "(\"" + currentProp.matchName.toString() + "\")" + pathPath;
             }
-        return pathPath
+            // Traverse up
+            currentProp = currentProp.parentProperty;
+        }
+        return pathPath;
+    }
+
+    function getGroupPath(currentProp, pathHierarchy){
+        // Typically up 3 levels from the path to the group's transform
+        currentProp = currentProp.parentProperty.parentProperty.parentProperty;
+        return getPropPath(currentProp, pathHierarchy);
     }
 
     function getPathPoints(path){
         return path.value.vertices;
     }
 
-
-    /* Project specific code */
-
-    function forEachPath(doSomething){
-
-        var comp = getActiveComp();
-
-        if(comp == null) {
-            return
-        }
-
-            var selectedLayers = getSelectedLayers(comp);
-            if (selectedLayers == null){
-                return
-            }
-
-            // First store the set of selected paths
-            var selectedPaths = [];
-            var parentLayers = [];
-            forEachLayer(selectedLayers,function(selectedLayer){
-
-                var paths = getSelectedProperties(selectedLayer);
-                if (paths == null){
-                    return
-                }
-
-                forEachProperty(paths,function(path){
-                    var isShapePath = matchMatchName(path,"ADBE Vector Shape");
-                    var isMaskPath = matchMatchName(path,"ADBE Mask Shape");
-                // var isPaintPath = matchMatchName(path,"ADBE Paint Shape"); //Paint and roto strokes not yet supported in scripting
-                    if(isShapePath != null || isMaskPath != null ){
-                        selectedPaths.push(path);
-                        parentLayers.push(selectedLayer);
-                    }
-                });
-            });
-
-            // Then operate on the selection
-            if (selectedPaths.length == 0){
-                var pathError = localize("$$$/AE/Script/CreatePathNulls/ErrorNoPathsSelected=Error: No paths selected.");
-
-                alert(pathError);
-                return
-            }
-
-            for (var p = 0, pl = selectedPaths.length; p < pl; p++) {
-                    doSomething(comp,parentLayers[p],selectedPaths[p]);
-            }
-
+    function getCheckRotate(){
+        return w.checkRotate.value;
     }
 
+
+    /* --------------------------------------------------
+       forEachPath
+       (Executes a function on each selected path property.)
+    -------------------------------------------------- */
+    function forEachPath(doSomething){
+        var comp = getActiveComp();
+        if (!comp) return;
+
+        var selectedLayers = getSelectedLayers(comp);
+        if (!selectedLayers || selectedLayers.length === 0) return;
+
+        var selectedPaths = [];
+        var parentLayers = [];
+
+        forEachLayer(selectedLayers, function(selectedLayer){
+            var props = getSelectedProperties(selectedLayer);
+            if (!props) return;
+            forEachProperty(props, function(path){
+                var isShapePath = matchMatchName(path, "ADBE Vector Shape");
+                var isMaskPath  = matchMatchName(path, "ADBE Mask Shape");
+                // Excluding Paint & Roto because not script-accessible
+                if (isShapePath || isMaskPath) {
+                    selectedPaths.push(path);
+                    parentLayers.push(selectedLayer);
+                }
+            });
+        });
+
+        if (selectedPaths.length === 0){
+            var pathError = localize("$$$/AE/Script/CreatePathNulls/ErrorNoPathsSelected=Error: No paths selected.");
+            alert(pathError);
+            return;
+        }
+
+        for (var p = 0; p < selectedPaths.length; p++) {
+            doSomething(comp, parentLayers[p], selectedPaths[p]);
+        }
+    }
+
+
+    /* --------------------------------------------------
+       LINK NULLS TO POINTS
+       (Nulls follow path vertices)
+    -------------------------------------------------- */
     function linkNullsToPoints(){
         var undoGroup = localize("$$$/AE/Script/CreatePathNulls/LinkNullsToPathPoints=Link Nulls to Path Points");
         app.beginUndoGroup(undoGroup);
 
-        forEachPath(function(comp,selectedLayer,path){
+        forEachPath(function(comp, selectedLayer, path){
             var pathHierarchy = [];
-            var pathPath = getPropPath(path, pathHierarchy);
-            // Do things with the path points
+            var pathPath  = getPropPath(path, pathHierarchy);
+            var groupPath = getGroupPath(path, pathHierarchy);
+
             var pathPoints = getPathPoints(path);
-            for (var i = 0, ii = pathPoints.length; i < ii; i++){
+            for (var i = 0; i < pathPoints.length; i++){
                 var nullName = selectedLayer.name + ": " + path.parentProperty.name + " [" + pathHierarchy.join(".") + "." + i + "]";
-                if(comp.layer(nullName) == undefined){
+                if (!comp.layer(nullName)) {
                     var newNull = createNull(comp);
                     newNull.moveBefore(selectedLayer);
+                    newNull.name = nullName;
+                    newNull.label = 10;  // color label
+
+                    // Position expression to follow path point
                     newNull.position.setValue(pathPoints[i]);
                     newNull.position.expression =
-                            "var srcLayer = thisComp.layer(\"" + selectedLayer.name + "\"); \r" +
-                            "var srcPath = srcLayer" + pathPath + ".points()[" + i + "]; \r" +
-                            "srcLayer.toComp(srcPath);";
-                    newNull.name = nullName;
-                    newNull.label = 10;
+                        "var srcLayer = thisComp.layer(\"" + selectedLayer.name + "\");\r" +
+                        "var srcPos   = srcLayer" + groupPath + ".transform.position;\r" +
+                        "var srcPath  = srcLayer" + pathPath + ".points()[" + i + "];\r" +
+                        "srcLayer.toComp(srcPath + srcPos);";
+
+                    // Optional rotation using tangents
+                    if (getCheckRotate()){
+                        newNull.rotation.expression =
+                            "var srcLayer = thisComp.layer(\"" + selectedLayer.name + "\");\r" +
+                            "var tang     = srcLayer" + pathPath + ".outTangents()[" + i + "];\r" +
+                            "var d        = tang + transform.position;\r" +
+                            "if (d[0] == 0){\r" +
+                            "   A = (d[1]<0) ? 90 : -90;\r" +
+                            "} else {\r" +
+                            "   A = radiansToDegrees(Math.atan(d[1]/d[0]));\r" +
+                            "}\r" +
+                            "((d[0]>0) ? A : 180 + A) + srcLayer.rotation;";
                     }
                 }
+            }
         });
+
         app.endUndoGroup();
     }
 
+
+    /* --------------------------------------------------
+       LINK POINTS TO NULLS
+       (Path points follow the Nulls)
+    -------------------------------------------------- */
     function linkPointsToNulls(){
         var undoGroup = localize("$$$/AE/Script/CreatePathNulls/LinkPathPointsToNulls=Link Path Points to Nulls");
         app.beginUndoGroup(undoGroup);
 
-        forEachPath(function(comp,selectedLayer,path){
-            // Get property path to path
+        forEachPath(function(comp, selectedLayer, path){
             var pathHierarchy = [];
-            var pathPath = getPropPath(path, pathHierarchy);
-            var nullSet = [];
-            // Do things with the path points
-            var pathPoints = getPathPoints(path);
-            for (var i = 0, ii = pathPoints.length; i < ii; i++){ //For each path point
+            var pathPath  = getPropPath(path, pathHierarchy);
+            var groupPath = getGroupPath(path, pathHierarchy);
+            var groupId   = pathHierarchy.slice();
+
+            var nullSet   = [];
+            var pathPoints= getPathPoints(path);
+
+            // Create (or find) a Null per vertex
+            for (var i = 0; i < pathPoints.length; i++){
                 var nullName = selectedLayer.name + ": " + path.parentProperty.name + " [" + pathHierarchy.join(".") + "." + i + "]";
                 nullSet.push(nullName);
 
-                // Get names of nulls that don't exist yet and create them
-                if(comp.layer(nullName) == undefined){
-
-                    //Create nulls
+                if (!comp.layer(nullName)) {
                     var newNull = createNull(comp);
                     newNull.moveBefore(selectedLayer);
-                    // Null layer name
                     newNull.name = nullName;
                     newNull.label = 11;
 
-                    // Set position using layer space transforms, then remove expressions
+                    // Initialize position to the shape vertex
                     newNull.position.setValue(pathPoints[i]);
+                    // Expression to account for shape group offset, then bake in
                     newNull.position.expression =
-                            "var srcLayer = thisComp.layer(\"" + selectedLayer.name + "\"); \r" +
-                            "var srcPath = srcLayer" + pathPath + ".points()[" + i + "]; \r" +
-                            "srcLayer.toComp(srcPath);";
+                        "var srcLayer = thisComp.layer(\"" + selectedLayer.name + "\");\r" +
+                        "var srcPos   = srcLayer" + groupPath + ".transform.position;\r" +
+                        "var srcPath  = srcLayer" + pathPath + ".points()[" + i + "];\r" +
+                        "srcLayer.toComp(srcPath + srcPos);";
                     newNull.position.setValue(newNull.position.value);
                     newNull.position.expression = '';
-                    }
-
                 }
+            }
 
-            // Get any existing Layer Control effects
+            // Add or re-link any needed Layer Control effects on the shape layer
             var existingEffects = [];
-            forEachEffect(selectedLayer,function(targetEffect){
-                if(matchMatchName(targetEffect,"ADBE Layer Control") != null) {
+            forEachEffect(selectedLayer, function(targetEffect){
+                if (matchMatchName(targetEffect, "ADBE Layer Control")) {
                     existingEffects.push(targetEffect.name);
                 }
             });
 
-            // Add new layer control effects for each null
-            for(var n = 0, nl = nullSet.length; n < nl; n++){
-                if(existingEffects.join("|").indexOf(nullSet[n]) != -1){ //If layer control effect exists, relink it to null
-                    selectedLayer.property("ADBE Effect Parade")(nullSet[n]).property("ADBE Layer Control-0001").setValue(comp.layer(nullSet[n]).index);
+            for (var n = 0; n < nullSet.length; n++){
+                var nullLayerName = nullSet[n];
+                if (existingEffects.join("|").indexOf(nullLayerName) !== -1) {
+                    // Re-link existing effect
+                    selectedLayer.property("ADBE Effect Parade")(nullLayerName)
+                        .property("ADBE Layer Control-0001")
+                        .setValue(comp.layer(nullLayerName).index);
                 } else {
+                    // Create new effect
                     var newControl = selectedLayer.property("ADBE Effect Parade").addProperty("ADBE Layer Control");
-                    newControl.name = nullSet[n];
-                    newControl.property("ADBE Layer Control-0001").setValue(comp.layer(nullSet[n]).index);
+                    newControl.name = nullLayerName;
+                    newControl.property("ADBE Layer Control-0001").setValue(comp.layer(nullLayerName).index);
                 }
             }
 
-            // Set path expression that references nulls
+            // Expression on the path: references each Null
             path.expression =
-                        "var nullLayerNames = [\"" + nullSet.join("\",\"") + "\"]; \r" +
-                        "var origPath = thisProperty; \r" +
-                        "var origPoints = origPath.points(); \r" +
-                        "var origInTang = origPath.inTangents(); \r" +
-                        "var origOutTang = origPath.outTangents(); \r" +
-                        "var getNullLayers = []; \r" +
-                        "for (var i = 0, il = nullLayerNames.length; i < il; i++){ \r" +
-                        "    try{  \r" +
-                        "        getNullLayers.push(effect(nullLayerNames[i])(\"ADBE Layer Control-0001\")); \r" +
-                        "    } catch(err) { \r" +
-                        "        getNullLayers.push(null); \r" +
-                        "    }} \r" +
-                        "for (var i = 0, il = getNullLayers.length; i < il; i++){ \r" +
-                        "    if (getNullLayers[i] != null && getNullLayers[i].index != thisLayer.index){ \r" +
-                        "        origPoints[i] = fromCompToSurface(getNullLayers[i].toComp(getNullLayers[i].anchorPoint));  \r" +
-                        "    }} \r" +
-                        "createPath(origPoints,origInTang,origOutTang,origPath.isClosed());";
-
+                "var nullLayerNames = [\"" + nullSet.join("\",\"") + "\"];\r" +
+                "var origPath   = thisProperty;\r" +
+                "var origPoints = origPath.points();\r" +
+                "var origInTang = origPath.inTangents();\r" +
+                "var origOutTang= origPath.outTangents();\r" +
+                "// transform offset from the group transform:\r" +
+                "var origPos    = content(" + groupId[0] + ").transform.position;\r" +
+                "var getNullLayers = [];\r" +
+                "for (var i = 0; i < nullLayerNames.length; i++){\r" +
+                "    try {\r" +
+                "        getNullLayers.push(effect(nullLayerNames[i])(\"ADBE Layer Control-0001\"));\r" +
+                "    } catch(err) {\r" +
+                "        getNullLayers.push(null);\r" +
+                "    }\r" +
+                "}\r" +
+                "for (var i = 0; i < getNullLayers.length; i++){\r" +
+                "    if (getNullLayers[i] != null && getNullLayers[i].index != thisLayer.index){\r" +
+                "        origPoints[i] = fromCompToSurface(getNullLayers[i].toComp(getNullLayers[i].anchorPoint)) - origPos;\r" +
+                "    }\r" +
+                "}\r" +
+                "createPath(origPoints, origInTang, origOutTang, origPath.isClosed());";
         });
+
         app.endUndoGroup();
     }
 
+
+    /* --------------------------------------------------
+       TRACE PATH
+       (Creates a Null traveling along the path)
+    -------------------------------------------------- */
     function tracePath(){
         var undoGroup = localize("$$$/AE/Script/CreatePathNulls/CreatePathTracerNull=Create Path Tracer Null");
         app.beginUndoGroup(undoGroup);
 
-        var sliderName = localize("$$$/AE/Script/CreatePathNulls/TracerTiming=Tracer Timing");
-        var checkboxName = localize("$$$/AE/Script/CreatePathNulls/LoopTracer=Loop Tracer");
-
-        forEachPath(function(comp,selectedLayer,path){
+        forEachPath(function(comp, selectedLayer, path){
             var pathHierarchy = [];
             var pathPath = getPropPath(path, pathHierarchy);
 
             // Create tracer null
             var newNull = createNull(comp);
             newNull.moveBefore(selectedLayer);
-
-            // Add expression control effects to the null
-            var nullControl = newNull.property("ADBE Effect Parade").addProperty("Pseudo/ADBE Trace Path");
-            nullControl.property("Pseudo/ADBE Trace Path-0002").setValue(true);
-            nullControl.property("Pseudo/ADBE Trace Path-0001").setValuesAtTimes([0,1],[0,100]);
-            nullControl.property("Pseudo/ADBE Trace Path-0001").expression =
-                        "if(thisProperty.propertyGroup(1)(\"Pseudo/ADBE Trace Path-0002\") == true && thisProperty.numKeys > 1){ \r" +
-                        "thisProperty.loopOut(\"cycle\"); \r" +
-                        "} else { \r" +
-                        "value \r" +
-                        "}";
-            newNull.position.expression =
-                    "var pathLayer = thisComp.layer(\"" + selectedLayer.name + "\"); \r" +
-                    "var progress = thisLayer.effect(\"Pseudo/ADBE Trace Path\")(\"Pseudo/ADBE Trace Path-0001\")/100; \r" +
-                    "var pathToTrace = pathLayer" + pathPath + "; \r" +
-                    "pathLayer.toComp(pathToTrace.pointOnPath(progress));";
-            newNull.rotation.expression =
-                    "var pathToTrace = thisComp.layer(\"" + selectedLayer.name + "\")" + pathPath + "; \r" +
-                    "var progress = thisLayer.effect(\"Pseudo/ADBE Trace Path\")(\"Pseudo/ADBE Trace Path-0001\")/100; \r" +
-                    "var pathTan = pathToTrace.tangentOnPath(progress); \r" +
-                    "radiansToDegrees(Math.atan2(pathTan[1],pathTan[0]));";
             newNull.name = "Trace " + selectedLayer.name + ": " + path.parentProperty.name + " [" + pathHierarchy.join(".") + "]";
             newNull.label = 10;
 
+            // Add expression-control effect
+            var traceEffect = newNull.property("ADBE Effect Parade").addProperty("Pseudo/ADBE Trace Path");
+            traceEffect.property("Pseudo/ADBE Trace Path-0002").setValue(true); // loop on
+            traceEffect.property("Pseudo/ADBE Trace Path-0001").setValuesAtTimes([0,1],[0,100]);
+            traceEffect.property("Pseudo/ADBE Trace Path-0001").expression =
+                "if(thisProperty.propertyGroup(1)(\"Pseudo/ADBE Trace Path-0002\") == true && thisProperty.numKeys > 1){\r" +
+                "   thisProperty.loopOut(\"cycle\");\r" +
+                "} else {\r" +
+                "   value;\r" +
+                "}";
+
+            // Position expression
+            newNull.position.expression =
+                "var pathLayer  = thisComp.layer(\"" + selectedLayer.name + "\");\r" +
+                "var progress   = thisLayer.effect(\"Pseudo/ADBE Trace Path\")(\"Pseudo/ADBE Trace Path-0001\")/100;\r" +
+                "var pathToTrace= pathLayer" + pathPath + ";\r" +
+                "pathLayer.toComp(pathToTrace.pointOnPath(progress));";
+
+            // Rotation expression
+            newNull.rotation.expression =
+                "var pathToTrace= thisComp.layer(\"" + selectedLayer.name + "\")" + pathPath + ";\r" +
+                "var progress   = thisLayer.effect(\"Pseudo/ADBE Trace Path\")(\"Pseudo/ADBE Trace Path-0001\")/100;\r" +
+                "var pathTan    = pathToTrace.tangentOnPath(progress);\r" +
+                "radiansToDegrees(Math.atan2(pathTan[1], pathTan[0]));";
         });
+
         app.endUndoGroup();
     }
 
 })(this);
-
-function selectFirstPathProperty() {
-    var activeComp = app.project.activeItem;
-
-    if (activeComp && activeComp instanceof CompItem) {
-        var layer = activeComp.selectedLayers[0];
-
-        if (layer && layer.matchName === "ADBE Vector Layer") {
-
-            var contents = layer.property("ADBE Root Vectors Group"); 
-
-            if (contents.numProperties > 0) {
-                
-                var shapeGroup = contents.property(1);
-
-                for (var i = 1; i <= shapeGroup.numProperties; i++) {
-                    var vectorGroup = shapeGroup.property(i);
-
-                    if (vectorGroup.matchName === "ADBE Vectors Group") {
-                        var pathGroup = vectorGroup.property(1);
-                        var pathProperty = pathGroup.property(2);
-                        pathProperty.selected = true;
-                        return;
-                    }
-                }
-
-                alert("Path property not found in the shape layer.");
-            } else {
-                alert("The shape layer has no contents.");
-            }
-        } else {
-            alert("Please select a shape layer.");
-        }
-    } else {
-        alert("No active composition found.");
-    }
-}
