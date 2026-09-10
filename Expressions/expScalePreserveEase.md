@@ -1,30 +1,47 @@
 # Hybrid Exponential Scale - Adaptive Preserve Ease
 
-A non-destructive (i.e., doesn't bake into every frame like AE's lackluster native keyframe assistant), Bezier-aware Scale expression that applies adaptive exponential interpolation with self-detected axis/proportional-zoom behavior while preserving your existing keyframe easing and timing from the observable pre-expression value.
+A non-destructive, keyframe-driven Scale expression for Adobe After Effects that remaps the property's native animation into an adaptive exponential interpolation while preserving the **observable eased progress and timing** of the existing keyframes. It does not bake animation, add Effect Controls, or require a separate controller layer; the Scale keyframes remain the animation UI.
+
+Here, **hybrid** refers exclusively to the interpolation strategy itself: the expression uses signed geometric interpolation where logarithmic behavior is well-defined and numerically safe, symlog/log-modulus interpolation around zero and across sign changes, and a smooth transition between those regimes near zero.
+
+> **Important meaning of “preserve ease”:** the expression reuses the normalized progress already produced by After Effects' pre-expression value. It therefore follows the observable timing/easing profile of the native keyframed animation. It does **not** claim to read hidden Graph Editor Bezier handles, nor does it preserve identical post-remap velocity or acceleration in Scale-units-per-second.
 
 ## What It Does
 
-- Uses the property's own keyed values and current pre-expression `value`; no Effect Controls are read.
-- Requires After Effects' modern JavaScript expression engine, not Legacy ExtendScript.
-- Infers eased progress from AE's native value at the current time.
-- Uses signed geometric interpolation for same-sign nonzero scale changes.
-- Uses symlog/log-modulus interpolation at zero, extremely near zero, or through sign changes.
-- Computes tolerances from each segment's own magnitude instead of using a fixed epsilon.
-- Preserves limited native overshoot when it is safe, with an automatic cap that tightens as endpoint ratios get more extreme.
-- Detects obvious proportional axis groups from segment endpoints, including XY, XZ, or YZ in 3D.
-- Leaves independent axes independent.
-- Passes through axes whose endpoints are effectively unchanged, preserving equal-endpoint value-graph motion.
-- Handles scalar, 2D, and 3D properties while returning the same dimensional shape it received.
+- Uses only the Scale property's own keyframes and current pre-expression `value`; no sliders, dropdowns, checkboxes, or other Effect Controls are read.
+- Targets After Effects' modern JavaScript expression engine, not Legacy ExtendScript.
+- Finds the currently active keyframe segment and leaves the native/pre-expression value untouched before the first segment, after the last segment, or when fewer than two keyframes exist.
+- Recovers eased progress independently for each meaningfully changing axis from the native value already calculated by After Effects.
+- Uses signed geometric interpolation when same-sign endpoints are safely away from zero.
+- Uses symlog/log-modulus interpolation when ordinary logarithmic interpolation is unsafe or undefined, including zero, very-near-zero values, and sign changes.
+- Smoothly blends symlog and geometric interpolation through a narrow near-zero transition band rather than switching abruptly.
+- Uses combined absolute-plus-relative equality tolerances so numerical decisions scale with the magnitude of the keyed values.
+- Retains a bounded amount of native normalized-progress overshoot, with less extrapolation allowed as the nonlinear transform span becomes more extreme.
+- Detects coupled/proportional axis groups from the keyframe endpoints, including XY, XZ, or YZ pairs in 3D.
+- Keeps clearly independent axes independent and does not pull an unchanged default Z axis into an XY zoom.
+- Passes through axes whose endpoints are effectively unchanged, preserving native equal-endpoint value-graph excursions rather than dividing by an unstable near-zero endpoint delta.
+- Includes last-resort finite-value safeguards for pathological floating-point ranges: overflow-prone progress subtraction is rescaled, and a non-finite nonlinear result falls back to the native pre-expression component instead of emitting `NaN`/`Infinity`.
+- Returns the same scalar/vector shape it receives; the intended use is Scale, so normal use is 2D or 3D.
+
+## Compatibility
+
+**After Effects 16.0+**, with:
+
+`File > Project Settings > Expressions > Expressions Engine` set to **JavaScript**.
+
+Adobe documents the JavaScript expression engine introduced with After Effects 16.0 as being based on ECMAScript 2018. This expression intentionally uses modern JavaScript features such as `const`, `let`, an arrow-function IIFE, `Number.isFinite()`, `Math.log1p()`, and `Math.expm1()`. It does not attempt Legacy ExtendScript compatibility.
+
+The segment lookup deliberately continues to use `nearestKey()` instead of the newer `previousKey()` / `nextKey()` helpers. Those neighboring-key methods were added only in After Effects 26.0; retaining `nearestKey()` preserves the much broader AE 16.0+ compatibility target.
 
 ## Expression
 
-Compatibility: After Effects 16.0+ with `File > Project Settings > Expressions > Expressions Engine` set to `JavaScript`.
+Paste only the JavaScript code block below onto **Scale**:
 
 ```js
 // Hybrid Exponential Scale - Adaptive Preserve Ease
-// Requires the modern JavaScript expression engine.
+// Modern After Effects JavaScript expression engine (not Legacy ExtendScript).
 // Drop on Scale. No sliders, dropdowns, checkboxes, or Effect Controls.
-// The keyframes themselves are the only UI.
+// The keyframes themselves are the only animation UI.
 
 (() => {
   const ABS_TOL = 1e-7;
@@ -34,10 +51,10 @@ Compatibility: After Effects 16.0+ with `File > Project Settings > Expressions >
   const SYMLOG_REL = 5e-2;
   const SNAP_U = 1e-5;
   const TINY = 1e-12;
-  const TIME_TINY = 1e-9;
   const MAX_EXTRA_U = 0.35;
   const GROUP_LOG_TOL = 0.025;
   const GEOM_BLEND_MULT = 64;
+  const GEOM_BLEND_HI = Math.max(Z_BAND * GEOM_BLEND_MULT, Z_BAND + ABS_TOL);
 
   function clamp(x, lo, hi) {
     return Math.min(Math.max(x, lo), hi);
@@ -50,9 +67,9 @@ Compatibility: After Effects 16.0+ with `File > Project Settings > Expressions >
   function asVec(x) {
     if (!hasLength(x)) return [x];
 
-    const a = [];
-    for (let i = 0; i < x.length; i++) a[i] = x[i];
-    return a;
+    const out = [];
+    for (let i = 0; i < x.length; i++) out[i] = x[i];
+    return out;
   }
 
   function fromVec(v, wasVec) {
@@ -60,9 +77,9 @@ Compatibility: After Effects 16.0+ with `File > Project Settings > Expressions >
   }
 
   function makeVec(n, fillValue) {
-    const a = [];
-    for (let i = 0; i < n; i++) a[i] = fillValue;
-    return a;
+    const out = [];
+    for (let i = 0; i < n; i++) out[i] = fillValue;
+    return out;
   }
 
   function magRef(a, b) {
@@ -77,10 +94,6 @@ Compatibility: After Effects 16.0+ with `File > Project Settings > Expressions >
     return Math.abs(a - b) <= tol1(a, b);
   }
 
-  function zeroBand(a, b) {
-    return Z_BAND;
-  }
-
   function symlogC(a, b) {
     return Math.max(tol1(a, b), SYMLOG_REL * magRef(a, b));
   }
@@ -89,18 +102,18 @@ Compatibility: After Effects 16.0+ with `File > Project Settings > Expressions >
     return (a > z && b > z) || (a < -z && b < -z);
   }
 
+  function crossesOrTouchesZero(a, b) {
+    return a === 0 || b === 0 || (a < 0) !== (b < 0);
+  }
+
   function smoothstep(edge0, edge1, x) {
-    const t = clamp((x - edge0) / (edge1 - edge0), 0, 1);
-    return t * t * (3 - 2 * t);
+    const u = clamp((x - edge0) / (edge1 - edge0), 0, 1);
+    return u * u * (3 - 2 * u);
   }
 
   function geomWeight(a, b) {
-    const z = zeroBand(a, b);
-    if (!sameNonZeroSign(a, b, z)) return 0;
-
-    const m = Math.min(Math.abs(a), Math.abs(b));
-    const hi = Math.max(z * GEOM_BLEND_MULT, z + ABS_TOL);
-    return smoothstep(z, hi, m);
+    if (!sameNonZeroSign(a, b, Z_BAND)) return 0;
+    return smoothstep(Z_BAND, GEOM_BLEND_HI, Math.min(Math.abs(a), Math.abs(b)));
   }
 
   function symlog(x, c) {
@@ -112,10 +125,14 @@ Compatibility: After Effects 16.0+ with `File > Project Settings > Expressions >
   }
 
   function signedGeom(a, b, u) {
-    const r = b / a;
-    if (r > 0 && Number.isFinite(r)) return a * Math.pow(r, u);
+    const ratio = b / a;
+    if (ratio > 0 && Number.isFinite(ratio)) return a * Math.pow(ratio, u);
 
-    return Math.sign(a) * Math.exp(Math.log(Math.abs(a)) + u * (Math.log(Math.abs(b)) - Math.log(Math.abs(a))));
+    // Defensive fallback if b / a overflows even though a and b share sign.
+    return Math.sign(a) * Math.exp(
+      Math.log(Math.abs(a)) +
+      u * (Math.log(Math.abs(b)) - Math.log(Math.abs(a)))
+    );
   }
 
   function symlogMix(a, b, u) {
@@ -125,8 +142,9 @@ Compatibility: After Effects 16.0+ with `File > Project Settings > Expressions >
     return symexp(ya + u * (yb - ya), c);
   }
 
-  function mixAdaptive(a, b, u) {
-    if (nearSame(a, b)) return a;
+  function mixAdaptive(a, b, u, fallback) {
+    const tol = tol1(a, b);
+    if (Math.abs(a - b) <= tol) return a;
     if (u === 0) return a;
     if (u === 1) return b;
 
@@ -140,21 +158,28 @@ Compatibility: After Effects 16.0+ with `File > Project Settings > Expressions >
     } else {
       const s = symlogMix(a, b, u);
       const g = signedGeom(a, b, u);
-      r = s * (1 - gw) + g * gw;
+      r = s + (g - s) * gw;
     }
 
-    if (a * b <= 0 && Math.abs(r) <= tol1(a, b)) r = 0;
-    if (u > 0 && u <= SNAP_U && Math.abs(r - a) <= tol1(a, b) * 4) return a;
-    if (u < 1 && u >= 1 - SNAP_U && Math.abs(r - b) <= tol1(a, b) * 4) return b;
+    if (!Number.isFinite(r)) {
+      return Number.isFinite(fallback) ? fallback : (u < 0.5 ? a : b);
+    }
+
+    if (crossesOrTouchesZero(a, b) && Math.abs(r) <= tol) r = 0;
+    if (u > 0 && u <= SNAP_U && Math.abs(r - a) <= tol * 4) return a;
+    if (u < 1 && u >= 1 - SNAP_U && Math.abs(r - b) <= tol * 4) return b;
 
     return r;
   }
 
-  function componentU(a, b, cur, t, t0, dt) {
+  function componentU(a, b, cur) {
     const d = b - a;
-    return (Math.abs(d) > tol1(a, b))
-      ? (cur - a) / d
-      : (t - t0) / Math.max(TIME_TINY, dt);
+    const n = cur - a;
+    if (Number.isFinite(d) && Number.isFinite(n)) return n / d;
+
+    // Last-resort rescaling avoids overflow in the subtraction itself.
+    const m = Math.max(1, Math.abs(a), Math.abs(b), Math.abs(cur));
+    return (cur / m - a / m) / (b / m - a / m);
   }
 
   function transformRisk(a, b) {
@@ -167,19 +192,18 @@ Compatibility: After Effects 16.0+ with `File > Project Settings > Expressions >
 
     const c = symlogC(a, b);
     const syRisk = Math.abs(symlog(b, c) - symlog(a, c));
-
     if (gw <= 0) return syRisk;
 
     const geomRisk = Math.abs(Math.log(Math.abs(b)) - Math.log(Math.abs(a)));
-    return syRisk * (1 - gw) + geomRisk * gw;
+    return syRisk + (geomRisk - syRisk) * gw;
   }
 
   function extraForRisk(risk) {
     if (risk <= TINY) return 0;
 
-    // Risk is the transform-space span. Larger spans get less extrapolation room.
+    // Larger transform-space spans get less extrapolation room.
     const maxFactor = 1.25 + 0.75 / (1 + risk);
-    const extra = Math.log(maxFactor) / Math.max(risk, TINY);
+    const extra = Math.log(maxFactor) / risk;
     return clamp(extra, 0, MAX_EXTRA_U);
   }
 
@@ -189,56 +213,43 @@ Compatibility: After Effects 16.0+ with `File > Project Settings > Expressions >
   }
 
   function axisWeight(a, b) {
-    return Math.abs(b - a) / Math.max(tol1(a, b), magRef(a, b));
-  }
-
-  function changedEnough(a, b) {
-    return Math.abs(b - a) > tol1(a, b);
+    return Math.abs(b - a) / magRef(a, b);
   }
 
   function bothNearZero(a, b) {
-    return Math.abs(a) <= zeroBand(a, b) && Math.abs(b) <= zeroBand(a, b);
+    return Math.abs(a) <= Z_BAND && Math.abs(b) <= Z_BAND;
   }
 
   function startsNearZero(i, j, v0, v1) {
-    return Math.abs(v0[i]) <= zeroBand(v0[i], v1[i]) &&
-           Math.abs(v0[j]) <= zeroBand(v0[j], v1[j]) &&
-           Math.abs(v1[i]) > zeroBand(v0[i], v1[i]) &&
-           Math.abs(v1[j]) > zeroBand(v0[j], v1[j]);
+    return Math.abs(v0[i]) <= Z_BAND &&
+           Math.abs(v0[j]) <= Z_BAND &&
+           Math.abs(v1[i]) > Z_BAND &&
+           Math.abs(v1[j]) > Z_BAND;
   }
 
   function endsNearZero(i, j, v0, v1) {
-    return Math.abs(v1[i]) <= zeroBand(v0[i], v1[i]) &&
-           Math.abs(v1[j]) <= zeroBand(v0[j], v1[j]) &&
-           Math.abs(v0[i]) > zeroBand(v0[i], v1[i]) &&
-           Math.abs(v0[j]) > zeroBand(v0[j], v1[j]);
+    return Math.abs(v1[i]) <= Z_BAND &&
+           Math.abs(v1[j]) <= Z_BAND &&
+           Math.abs(v0[i]) > Z_BAND &&
+           Math.abs(v0[j]) > Z_BAND;
   }
 
-  function sameSignPair(a0, a1, b0, b1) {
-    return ((a0 > 0 && a1 > 0) || (a0 < 0 && a1 < 0)) &&
-           ((b0 > 0 && b1 > 0) || (b0 < 0 && b1 < 0));
-  }
+  function proportionalPair(i, j, v0, v1, changed) {
+    if (!changed[i] || !changed[j]) return false;
 
-  function proportionalPair(i, j, v0, v1) {
-    if (!changedEnough(v0[i], v1[i]) || !changedEnough(v0[j], v1[j])) return false;
-
-    // Grow-from-zero and shrink-to-zero are valid proportional cases if both axes do it.
+    // Simultaneous grow-from-zero / shrink-to-zero is treated as a coupled scale move.
     if (startsNearZero(i, j, v0, v1)) return true;
     if (endsNearZero(i, j, v0, v1)) return true;
 
     if (bothNearZero(v0[i], v1[i]) || bothNearZero(v0[j], v1[j])) return false;
-
-    const zi = zeroBand(v0[i], v1[i]);
-    const zj = zeroBand(v0[j], v1[j]);
-    if (!sameNonZeroSign(v0[i], v1[i], zi)) return false;
-    if (!sameNonZeroSign(v0[j], v1[j], zj)) return false;
-    if (!sameSignPair(v0[i], v1[i], v0[j], v1[j])) return false;
+    if (!sameNonZeroSign(v0[i], v1[i], Z_BAND)) return false;
+    if (!sameNonZeroSign(v0[j], v1[j], Z_BAND)) return false;
 
     const ri = v1[i] / v0[i];
     const rj = v1[j] / v0[j];
-    if (ri * rj <= 0) return false;
+    if (!(ri > 0) || !(rj > 0) || !Number.isFinite(ri) || !Number.isFinite(rj)) return false;
 
-    return Math.abs(Math.log(Math.abs(ri)) - Math.log(Math.abs(rj))) <= GROUP_LOG_TOL;
+    return Math.abs(Math.log(ri) - Math.log(rj)) <= GROUP_LOG_TOL;
   }
 
   function pairError(i, j, v0, v1) {
@@ -250,9 +261,9 @@ Compatibility: After Effects 16.0+ with `File > Project Settings > Expressions >
       return Math.abs(Math.log(Math.abs(v0[i])) - Math.log(Math.abs(v0[j])));
     }
 
-    const ri = v1[i] / v0[i];
-    const rj = v1[j] / v0[j];
-    return Math.abs(Math.log(Math.abs(ri)) - Math.log(Math.abs(rj)));
+    const ri = Math.abs(v1[i] / v0[i]);
+    const rj = Math.abs(v1[j] / v0[j]);
+    return Math.abs(Math.log(ri) - Math.log(rj));
   }
 
   function groupU(mask, dim, uRaw, extraAxis, v0, v1) {
@@ -261,16 +272,15 @@ Compatibility: After Effects 16.0+ with `File > Project Settings > Expressions >
     let extra = MAX_EXTRA_U;
 
     for (let i = 0; i < dim; i++) {
-      if (mask[i]) {
-        const w = Math.max(axisWeight(v0[i], v1[i]), 0.0001);
-        uSum += uRaw[i] * w;
-        wSum += w;
-        extra = Math.min(extra, extraAxis[i]);
-      }
+      if (!mask[i]) continue;
+
+      const w = Math.max(axisWeight(v0[i], v1[i]), 0.0001);
+      uSum += uRaw[i] * w;
+      wSum += w;
+      extra = Math.min(extra, extraAxis[i]);
     }
 
-    if (wSum <= TINY) return 0;
-    return limitU(uSum / wSum, extra);
+    return wSum > TINY ? limitU(uSum / wSum, extra) : 0;
   }
 
   function addPairGroup(mask, a, b) {
@@ -303,62 +313,64 @@ Compatibility: After Effects 16.0+ with `File > Project Settings > Expressions >
       if (err < bestErr) {
         bestA = 1;
         bestB = 2;
+        bestErr = err;
       }
     }
 
     if (bestA >= 0) addPairGroup(mask, bestA, bestB);
   }
 
-  function pairCount(a, b, c) {
-    return (a ? 1 : 0) + (b ? 1 : 0) + (c ? 1 : 0);
-  }
-
   const raw = value;
   const rawWasVec = hasLength(raw);
-  const v = asVec(raw);
-  const dim = v.length;
+  const native = asVec(raw);
+  const dim = native.length;
   const prop = thisProperty;
+  const numKeys = prop.numKeys;
 
-  if (prop.numKeys < 2) return raw;
+  // Outside an active keyframe segment, preserve the native/pre-expression value exactly.
+  if (numKeys < 2) return raw;
 
   const nk = prop.nearestKey(time);
-  const k = (nk.time > time) ? nk.index - 1 : nk.index;
-
-  if (k < 1 || k >= prop.numKeys) return raw;
+  const k = nk.time > time ? nk.index - 1 : nk.index;
+  if (k < 1 || k >= numKeys) return raw;
 
   const key0 = prop.key(k);
   const key1 = prop.key(k + 1);
-  const t0 = key0.time;
-  const t1 = key1.time;
-  const dt = t1 - t0;
   const v0 = asVec(key0.value);
   const v1 = asVec(key1.value);
 
   const uRaw = makeVec(dim, 0);
   const uAxis = makeVec(dim, 0);
   const extraAxis = makeVec(dim, 0);
+  const changed = makeVec(dim, false);
   const grouped = makeVec(dim, false);
+  let changedCount = 0;
 
   for (let i = 0; i < dim; i++) {
+    if (nearSame(v0[i], v1[i])) continue;
+
+    changed[i] = true;
+    changedCount++;
     const risk = transformRisk(v0[i], v1[i]);
     extraAxis[i] = extraForRisk(risk);
-    uRaw[i] = componentU(v0[i], v1[i], v[i], time, t0, dt);
+    uRaw[i] = componentU(v0[i], v1[i], native[i]);
     uAxis[i] = limitU(uRaw[i], extraAxis[i]);
   }
 
-  // Internalized aspect behavior:
-  // if the keys prove axes are proportional, process that proportional group
-  // with one shared u. In 3D, avoid fuzzy transitive chains: XYZ groups only
-  // when XY, XZ, and YZ all pass; otherwise use the single tightest pair.
-  if (dim >= 2) {
-    const xy = proportionalPair(0, 1, v0, v1);
+  // If every axis is effectively unchanged, preserve native value-graph motion directly.
+  if (changedCount === 0) return raw;
+
+  // Infer proportional intent from the keyed endpoints. In 3D, require all
+  // three pair tests for XYZ grouping; otherwise group only the tightest pair.
+  if (dim >= 2 && changedCount >= 2) {
+    const xy = proportionalPair(0, 1, v0, v1, changed);
 
     if (dim < 3) {
       if (xy) addPairGroup(grouped, 0, 1);
     } else {
-      const xz = proportionalPair(0, 2, v0, v1);
-      const yz = proportionalPair(1, 2, v0, v1);
-      const pairs = pairCount(xy, xz, yz);
+      const xz = proportionalPair(0, 2, v0, v1, changed);
+      const yz = proportionalPair(1, 2, v0, v1, changed);
+      const pairs = (xy ? 1 : 0) + (xz ? 1 : 0) + (yz ? 1 : 0);
 
       if (pairs === 3) {
         grouped[0] = true;
@@ -370,96 +382,329 @@ Compatibility: After Effects 16.0+ with `File > Project Settings > Expressions >
     }
   }
 
-  if (grouped[0] || grouped[1] || grouped[2]) {
-    const ug = groupU(grouped, dim, uRaw, extraAxis, v0, v1);
-    for (let i = 0; i < dim; i++) {
-      if (grouped[i]) {
-        uAxis[i] = ug;
-      }
+  let hasGroup = false;
+  for (let i = 0; i < dim; i++) {
+    if (grouped[i]) {
+      hasGroup = true;
+      break;
     }
   }
 
-  const expVec = makeVec(dim, 0);
-  for (let i = 0; i < dim; i++) {
-    expVec[i] = nearSame(v0[i], v1[i])
-      ? v[i]
-      : mixAdaptive(v0[i], v1[i], uAxis[i]);
+  if (hasGroup) {
+    const ug = groupU(grouped, dim, uRaw, extraAxis, v0, v1);
+    for (let i = 0; i < dim; i++) {
+      if (grouped[i]) uAxis[i] = ug;
+    }
   }
 
-  return fromVec(expVec, rawWasVec);
+  const out = makeVec(dim, 0);
+  for (let i = 0; i < dim; i++) {
+    // Equal/near-equal endpoints can still contain native value-graph motion.
+    out[i] = changed[i]
+      ? mixAdaptive(v0[i], v1[i], uAxis[i], native[i])
+      : native[i];
+  }
+
+  return fromVec(out, rawWasVec);
 })();
 ```
 
-## Internal Heuristics
+## How It Works
+
+### 1. After Effects' native value is the easing signal
+
+For a meaningfully changing component with keyframe endpoints `a` and `b`, the expression reconstructs the normalized progress already visible in After Effects' pre-expression value:
+
+```text
+u = (value - a) / (b - a)
+```
+
+This is the central preserve-ease mechanism. Instead of replacing the keyframe timing with a fresh `linear(time, ...)`, `ease()`, or hand-authored curve, the expression observes what After Effects has already produced at the current frame and reuses that progress as the driver for nonlinear interpolation.
+
+If the native animation reaches its ordinary midpoint, `u = 0.5`. If a temporal/value curve overshoots an endpoint, `u` can move below `0` or above `1`, after which the expression's risk-based extrapolation limiter decides how much of that overshoot is safe to retain.
+
+For an axis whose endpoints are equal or effectively equal, the denominator is not a reliable progress signal. The expression classifies that axis once, excludes it from proportional grouping, skips unnecessary progress/risk work for it, and passes through the native `value` instead. This also preserves native equal-endpoint value-graph motion or excursions that could otherwise be destroyed. Because such axes never consume recovered progress, no synthetic time-based fallback is needed.
+
+### 2. Active-segment selection is non-destructive
+
+The expression first identifies the segment surrounding the current time using `nearestKey()` and the returned key's `time` and `index`.
+
+If there are fewer than two keyframes, if the current time is before the first usable segment, or if it is at/after the final segment boundary where no following key exists, the expression returns the native/pre-expression value unchanged.
+
+That means EXP_2 affects only intervals that actually have two neighboring keyed endpoints to remap. It does not invent extrapolated animation outside the keyed range.
+
+### 3. Signed geometric interpolation handles ordinary exponential scale changes
+
+When both endpoints have the same nonzero sign and are sufficiently far from zero, interpolation is geometric:
+
+```text
+result = a * (b / a)^u
+```
+
+Equivalently, this linearly interpolates in logarithmic magnitude space and exponentiates back. At `u = 0.5`, positive values produce the geometric mean rather than the arithmetic mean.
+
+Examples with linear native progress:
+
+| Keyed segment | `u` | Linear/native value | Adaptive exponential result |
+| --- | ---: | ---: | ---: |
+| `100 -> 400` | `0.5` | `250` | `200` |
+| `-100 -> -400` | `0.5` | `-250` | `-200` |
+| `100 -> 200` | `0.5` | `150` | `141.421356...` |
+
+Negative-to-negative interpolation is handled as a signed geometric interpolation: magnitude changes exponentially while the negative sign is retained.
+
+### 4. Symlog handles zero, near-zero, and sign changes
+
+Ordinary logarithms are undefined at zero and cannot directly span positive and negative values. For those cases, the expression maps values through a symmetric logarithmic transform:
+
+```text
+symlog(x, c) = sign(x) * log(1 + abs(x) / c)
+```
+
+It linearly interpolates the transformed values, then applies the inverse:
+
+```text
+symexp(y, c) = sign(y) * c * (exp(abs(y)) - 1)
+```
+
+The scale constant `c` is adaptive:
+
+```text
+c = max(tolerance(a, b), 0.05 * max(1, abs(a), abs(b)))
+```
+
+This keeps the transform well-conditioned around zero while allowing large magnitudes to retain logarithmic character.
+
+For example, with keyed endpoints `0 -> 100` and native `u = 0.5`, the current constants yield approximately `17.9128785`, not the linear midpoint `50`. For `-100 -> 100` at `u = 0.5`, symmetry produces `0`.
+
+### 5. Near zero, the transform changes smoothly rather than abruptly
+
+For same-sign endpoints, the expression computes a geometric weight from the smaller endpoint magnitude. With the current constants:
+
+```text
+Z_BAND       = 0.001
+GEOM_BLEND_HI = 0.064
+```
+
+If the smaller magnitude is at or below `0.001`, geometric interpolation is disabled and symlog is used. From `0.001` through `0.064`, a smoothstep weight blends symlog and geometric results. At or above `0.064`, the result is fully geometric, provided the endpoints still share a safe nonzero sign.
+
+A sign-changing segment always uses the symlog path because ordinary geometric interpolation is not defined across the sign change.
+
+### 6. Equality decisions use magnitude-aware tolerances
+
+The expression does not rely on one fixed epsilon. Its principal equality tolerance is:
+
+```text
+tol(a, b) = max(1e-7, 1e-6 * max(1, abs(a), abs(b)))
+```
+
+This combines an absolute floor with a relative tolerance. The absolute component prevents pathological behavior close to zero; the relative component makes the comparison scale with large keyed values.
+
+The dedicated zero band remains intentionally absolute (`0.001`) because it defines where logarithmic/geometric behavior should transition, rather than merely testing floating-point equality.
+
+### 7. Coupled/proportional axes share progress only when the keys justify it
+
+Ordinary axes first recover their own native progress independently. This preserves per-axis easing when the keyframes describe genuinely independent scale motion.
+
+For two nonzero axes to be recognized as proportional, both must meaningfully change, each axis must keep a safe nonzero sign over the segment, and their keyed multiplicative ratios must be close in log space:
+
+```text
+abs(log(ratio_i) - log(ratio_j)) <= 0.025
+```
+
+The current `0.025` log tolerance corresponds to roughly a **2.53% multiplicative ratio difference**.
+
+A simultaneous grow-from-near-zero or shrink-to-near-zero is also treated as coupled. That special case is necessary because an ordinary endpoint ratio is undefined when an endpoint is zero.
+
+When a group is detected, its shared `u` is a weighted average of the axes' recovered native progress. Axes with more meaningful relative endpoint change receive more weight, and the group's extrapolation allowance is limited by the safest member of the group.
+
+In 2D, XY can group. In 3D, XY, XZ, and YZ are tested separately. All three axes group as XYZ only when **all three pair tests pass**. If one or two pair tests pass without full three-way agreement, only the single tightest valid pair is grouped. This prevents a fuzzy transitive chain from accidentally merging all three axes.
+
+### 8. Overshoot is retained only within a transform-risk budget
+
+The expression does not simply clamp every axis to `[0, 1]`, because doing so would erase useful native progress overshoot. Instead, it measures the nonlinear transform-space span of each axis.
+
+For a fully geometric segment:
+
+```text
+risk = abs(log(abs(b)) - log(abs(a)))
+```
+
+Near zero or across a sign change, the equivalent span is measured in symlog space. In the geometric/symlog transition band, the risk values are blended using the same geometric weight.
+
+That risk determines an allowed normalized-progress extrapolation:
+
+```text
+if risk <= tiny:
+    extra = 0
+else:
+    maxFactor = 1.25 + 0.75 / (1 + risk)
+    extra     = log(maxFactor) / risk
+    extra     = clamp(extra, 0, 0.35)
+
+uLimited = clamp(uRaw, -extra, 1 + extra)
+```
+
+Small transform spans can retain as much as `0.35` of normalized-progress extrapolation. Large logarithmic spans receive progressively less. For geometric segments, this directly constrains how violently multiplicative extrapolation can grow; for symlog/blended segments it serves as an analogous transform-space safety heuristic.
+
+This is intentionally conservative. The goal is to preserve useful easing overshoot without allowing extreme endpoint ratios to turn modest Graph Editor overshoot into enormous or non-finite scale values.
+
+### 9. Endpoint snapping suppresses numerical fuzz
+
+Very close to `u = 0` or `u = 1`, the nonlinear transform can produce a result that differs from the endpoint only by tiny floating-point noise. `SNAP_U` allows the expression to return the exact endpoint when both the progress and value error are already inside a very small tolerance neighborhood.
+
+This is not a general clamp and does not suppress deliberate overshoot outside the endpoints.
+
+### 10. Pathological floating-point overflow fails safe
+
+Ordinary After Effects Scale values never need this path, but the final production expression includes two defensive fallbacks so mathematically extreme finite inputs do not turn into expression-breaking non-finite output.
+
+First, native progress normally uses the direct formula `(cur - a) / (b - a)`. If either subtraction itself overflows the JavaScript number range, all three values are divided by a common magnitude before the subtraction is retried. Because the same nonzero scale factor is applied to numerator and denominator, the normalized progress is unchanged in exact arithmetic while the intermediate values remain representable.
+
+Second, after geometric/symlog interpolation, the result is checked with `Number.isFinite()`. If the nonlinear calculation has exceeded the representable range, the expression returns the current native pre-expression component for that frame. If even that native component is non-finite, it falls back to the nearer keyed endpoint in normalized-progress space.
+
+These safeguards are intentionally last-resort behavior. They do not alter ordinary finite Scale interpolation; they exist to ensure that a pathological numerical edge case degrades to a finite host value rather than poisoning the property with `NaN` or `Infinity`.
+
+## Internal Heuristics and Constants
+
+These are implementation constants, not user-facing controls. The keyframes remain the only animation UI.
+
+| Constant | Value | Purpose |
+| --- | ---: | --- |
+| `ABS_TOL` | `1e-7` | Absolute floor for near-equality tests. |
+| `REL_TOL` | `1e-6` | Relative component of magnitude-aware equality tests. |
+| `ZERO_ABS` | `1e-3` | Absolute near-zero floor used to build `Z_BAND`. |
+| `Z_BAND` | `0.001` with current constants | Region at/below which ordinary geometric interpolation is considered unsafe. |
+| `SYMLOG_REL` | `0.05` | Relative scale used to choose the symlog constant `c`. |
+| `SNAP_U` | `1e-5` | Tiny normalized-progress neighborhood used for exact endpoint snapping. |
+| `TINY` | `1e-12` | Generic guard against effectively zero internal denominators/spans. |
+| `MAX_EXTRA_U` | `0.35` | Maximum normalized-progress extrapolation allowed by the risk system. |
+| `GROUP_LOG_TOL` | `0.025` | Log-ratio tolerance for proportional/coupled axis detection. |
+| `GEOM_BLEND_MULT` | `64` | Expands the zero band to define the upper end of the symlog-to-geometric blend. |
+| `GEOM_BLEND_HI` | `0.064` with current constants | Precomputed top of the near-zero blend band. |
 
 ### Former `Blend`
 
-There is no blend amount. Each axis is adaptively remapped using the safest transform for that segment. Dead/no-change axes pass through the original pre-expression value, which preserves equal-endpoint value-graph motion.
+There is no global blend amount. Each axis automatically chooses or blends the safest interpolation domain for the current keyed segment. Same-sign values far from zero are geometric, dangerous zero/sign regions are symlog, and a narrow same-sign near-zero band blends between them.
 
 ### Former `Epsilon`
 
-The expression uses combined absolute-plus-relative tolerances:
-
-```txt
-tol = max(1e-7, 1e-6 * max(1, abs(a), abs(b)))
-```
-
-That makes the safety threshold scale with the values being animated. A 0-to-100 scale segment and a 0-to-100000 scale segment should not use the same absolute epsilon.
+There is no single fixed epsilon controlling all comparisons. Equality uses combined absolute and relative tolerances; the zero-transition band is a separate semantic threshold.
 
 ### Former `Axis Driver`
 
-Ordinary axes recover their own progress:
-
-```txt
-u_i = (value_i - keyStart_i) / (keyEnd_i - keyStart_i)
-```
-
-That preserves axis-specific easing better than one global driver. A shared driver is created only when the keyed segment clearly says multiple axes are proportional.
+There is no permanent X/Y/Z driver. Each changing axis normally recovers its own `u` from its own native value. A shared progress driver exists only for a detected coupled/proportional group.
 
 ### Former `Uniform Aspect`
 
-Aspect/grouping behavior is inferred, not chosen.
+There is no manual uniform-aspect switch. Coupling is inferred from the keyed endpoints on a per-segment basis. A default unchanged `100` Z Scale will therefore remain independent during an otherwise proportional XY zoom.
 
-The expression groups any obviously proportional axis pair:
+### Former `Clamp Progress` / `Overshoot Cap`
 
-- X/Y in 2D or 3D,
-- X/Z in 3D,
-- Y/Z in 3D.
+Progress is not globally forced into `[0, 1]`. Instead, transform-space risk dynamically chooses how far outside that interval each axis or group may travel.
 
-Each pair must meaningfully change and have keyed start/end values that are obviously proportional, or both axes must grow from zero / shrink to zero together. A default unchanged `100` Z scale will not be pulled into an XY zoom.
+## Refactors and Repairs in This Revision
 
-This grouping is heuristic and segment-stable. If proportional endpoints use intentionally different per-axis easing, the grouped result averages the recovered progress of the grouped axes. Use non-proportional endpoint values if you want to force fully independent axis treatment.
+This rewrite keeps EXP_2's animation model intact while incorporating the general code-quality, performance, and numerical lessons from the later hybrid work:
 
-Pairwise 3D grouping is intentional behavior, not just an optimization. It allows cases such as Y/Z scaling together while X remains unchanged. If two 3D pairs pass but the third pair does not, the expression groups only the tightest pair rather than merging all three through a fuzzy transitive chain.
+1. **Removed the redundant `sameSignPair()` test.** The preceding per-axis `sameNonZeroSign()` checks already proved the same condition, so the additional function did not reject any case that had not already been rejected.
+2. **Hardened proportional-ratio validation.** Ratios must be strictly positive and finite before logarithms are evaluated.
+3. **Made `pairError()` explicitly use absolute ratio magnitudes.** Valid proportional pairs are already positive-ratio cases, but the implementation now states the magnitude-space intent directly and defensively.
+4. **Corrected `addBestPair()` bookkeeping.** The YZ-winning branch now updates `bestErr` consistently. YZ was the final comparison, so the old omission did not alter the selected result, but the function is now internally correct rather than accidentally correct by ordering.
+5. **Simplified linear blend algebra.** Expressions of the form `a * (1 - w) + b * w` are written as `a + (b - a) * w`, reducing redundant arithmetic while preserving the same interpolation.
+6. **Precomputed the geometric blend ceiling.** `GEOM_BLEND_HI` is constant for the lifetime of an evaluation and no longer needs to be rebuilt inside every `geomWeight()` call.
+7. **Removed the unused-argument `zeroBand(a, b)` wrapper.** The zero band is genuinely constant, so the code now references `Z_BAND` directly instead of implying that the function depends on its arguments.
+8. **Replaced the product-based zero-crossing test with an explicit sign test.** `a * b <= 0` can theoretically overflow or underflow merely to answer a sign question. `crossesOrTouchesZero()` tests the actual condition without multiplying the endpoints.
+9. **Kept a defensive logarithmic fallback in `signedGeom()`.** If `b / a` becomes non-finite even though the endpoints share a safe sign, the expression interpolates logarithmic magnitudes directly rather than trusting the overflowed ratio.
+10. **Classified changed axes once per segment evaluation.** A `changed` mask now becomes the single source of truth for whether an axis participates in progress recovery, grouping, or nonlinear output. This removes repeated near-equality work and keeps the pass-through invariant explicit.
+11. **Removed the dead time-progress fallback and `TIME_TINY`.** Near-equal axes were already excluded from proportional groups and ultimately passed through from native `value`, so their synthetic time fraction could never affect output. The associated key-time reads and denominator guard were therefore unnecessary.
+12. **Cached `numKeys` and removed unused key-time reads.** This slightly reduces repeated host-property access and makes the active-segment code easier to audit.
+13. **Short-circuited all-unchanged segments.** If every axis is effectively unchanged between the current key pair, the expression returns the native value immediately, preserving any native equal-endpoint excursion without running grouping or nonlinear interpolation.
+14. **Simplified mathematically dominated arithmetic.** `axisWeight()` now divides directly by `magRef(a, b)` because, with the fixed production tolerances, that quantity always dominates the old `max(tol1(...), magRef(...))` denominator. Likewise, `extraForRisk()` divides directly by `risk` after the preceding `risk <= TINY` guard has already guaranteed a safe nonzero denominator.
+15. **Cached the per-call tolerance inside `mixAdaptive()`.** The same endpoint tolerance is reused for zero snapping and endpoint snapping instead of being recomputed several times.
+16. **Added overflow-safe normalized-progress recovery.** Direct subtraction remains the fast path. Only if the numerator or denominator subtraction becomes non-finite are the values normalized by a common magnitude before progress is recovered.
+17. **Added a final finite-output fail-safe.** If nonlinear interpolation ever produces a non-finite number, the current native component is returned instead; only if that is also non-finite does the expression fall back to a keyed endpoint.
+18. **Made group-presence detection dimension-generic.** The code does not depend on checking only hard-coded group-array positions, even though normal Scale is 2D/3D.
+19. **Clarified native-value naming and comments.** `native` consistently means the observable pre-expression value supplied by After Effects, making the distinction between native animation and nonlinear output easier to audit.
+20. **Retained `nearestKey()` intentionally.** The newer neighboring-key helpers would shorten segment lookup in AE 26.0+, but using them would unnecessarily discard compatibility with AE 16.0 through 25.x.
 
-### Former `Clamp Progress` and `Overshoot Cap`
+A side-by-side randomized comparison against the immediately preceding EXP_2 revision found no output differences in the ordinary finite test domain used for the production audit. The new rescaling and finite-output branches activate only when ordinary JavaScript arithmetic itself becomes non-finite, so they harden pathological numerical cases without changing normal animation semantics.
 
-Overshoot is always capped, but not always deleted. The cap is based on transform-space risk:
+## Behavioral Sanity Checks
 
-- mild scale ratios get more overshoot room,
-- extreme ratios get less,
-- near-zero and sign-crossing spans use symlog-space risk.
+The following examples assume a native normalized progress of `u = 0.5` unless otherwise noted:
 
-This preserves intentional Graph Editor overshoot without letting geometric extrapolation explode.
+| Scenario | Expected behavior |
+| --- | --- |
+| No keyframes, native Scale `[100, 100]` | Returns `[100, 100]` unchanged. |
+| Before the first usable segment / after the last | Returns native `value` unchanged. |
+| `100 -> 400` | Geometric midpoint `200`. |
+| `-100 -> -400` | Signed geometric midpoint `-200`. |
+| `0 -> 100` | Symlog result `~17.9128785`. |
+| `-100 -> 100` | Symlog midpoint `0`. |
+| Equal endpoints with a native value-graph excursion | Passes through the native excursion instead of flattening it. |
+| 3D `[100,100,100] -> [200,200,100]` | XY may share progress; unchanged Z remains native and is not pulled into the group. |
+| Proportional endpoints with intentionally different per-axis easing | Grouped axes use their weighted shared recovered progress, by design. |
+| Non-proportional endpoints | Axes retain independent recovered progress. |
+
+## Validation Performed on This Revision
+
+The final expression was extracted back out of this Markdown file, syntax-checked as modern JavaScript, and exercised in a mock After Effects property environment covering:
+
+- scalar, 2D, and 3D return shapes;
+- no-key, before-first-key, exact-key, between-key, and after-last-key behavior;
+- positive and negative geometric interpolation;
+- zero endpoints and sign-crossing symlog interpolation;
+- equal/near-equal endpoint native excursions;
+- independent per-axis easing;
+- proportional shared-progress grouping;
+- 3D XY grouping with unchanged Z;
+- hold-like native progress behavior;
+- bounded normalized-progress extrapolation;
+- finite-value recovery at extreme floating-point magnitudes.
+
+A **500,000-case randomized side-by-side regression test** compared this production candidate against the immediately preceding EXP_2 revision over ordinary finite inputs, including scalar/2D/3D shapes, equal/near-equal axes, and recovered progress both inside and outside `[0, 1]`. It produced **zero mismatches** and a measured maximum relative output difference of **0** in that test run.
+
+A separate **250,000-case extreme-range stress test** spanned finite magnitudes across hundreds of decimal orders, including cases designed to overflow intermediate subtraction or nonlinear extrapolation while the native input itself remained finite. All 250,000 cases produced finite output after the production version's rescaling and final finite-output safeguards.
+
+These tests validate the JavaScript/numerical logic, not the entire After Effects host runtime. Testing inside an actual After Effects composition remains the authoritative integration check before deployment.
 
 ## Known Limits
 
-- Expressions cannot read the actual Graph Editor temporal Bezier handles. This expression reuses observable native progress from `value`; it does not reconstruct hidden keyframe interpolation metadata.
-- Extreme overshoot is intentionally capped. If you need mathematically unbounded extrapolation, this expression is deliberately safer than that.
-- Proportional grouping is inferred from segment endpoints. In 3D, any proportional pair can group: XY, XZ, or YZ. If you want fully independent axes, make the endpoint ratios non-proportional.
-- The Markdown wrapper is for GitHub. Paste only the JavaScript code block into After Effects.
+- **No direct Graph Editor handle access.** Expression-side `Key` objects expose keyframe `index`, `time`, and `value`; they do not expose the full temporal Bezier handle/ease metadata available to scripting APIs. This expression therefore observes the native pre-expression result instead of reconstructing hidden handles.
+- **“Preserve ease” is progress preservation, not identical output velocity.** Applying a nonlinear function to the recovered progress necessarily changes Scale-space velocity and acceleration. The timing profile is inherited; the numeric derivative of the remapped value is not identical to the native derivative.
+- **Extreme overshoot is deliberately bounded.** If mathematically unbounded exponential extrapolation is required, this expression is intentionally safer than that requirement.
+- **Representational overflow falls back to native output.** At pathological floating-point magnitudes where the requested nonlinear value cannot be represented as a finite JavaScript number, the expression prioritizes a finite native component over preserving an unrepresentable exponential result.
+- **Axis grouping is heuristic and endpoint-driven.** Proportional endpoints are interpreted as evidence of coupled scaling. If those endpoints intentionally use different axis easing, the group averages their recovered progress. Use sufficiently non-proportional endpoint ratios if fully independent treatment is required.
+- **Grow-from-zero / shrink-to-zero coupling is inferred specially.** Ratios are undefined at zero, so simultaneous near-zero starts or ends are treated as coupled scale motion.
+- **Near-zero behavior is intentionally not pure exponential interpolation.** Symlog is a numerical and semantic fallback for regions where ordinary logarithmic interpolation is undefined or unstable.
+- **Negative Scale is supported mathematically.** In After Effects, negative Scale also implies the expected axis flip; the expression does not suppress that visual behavior.
+- **The Markdown wrapper is documentation.** Paste only the JavaScript code block into After Effects.
 
 ## Research Basis
 
-- Adobe's expression docs expose `value`, `valueAtTime`, `velocity`, `velocityAtTime`, `key`, `nearestKey`, and `numKeys`, but expression-side key objects do not expose temporal Bezier handles. This expression therefore infers progress from observable values rather than hidden Graph Editor metadata.
-- Adobe's modern JavaScript expression engine is the target here; the expression does not attempt to support Legacy ExtendScript.
-- Logarithmic interpolation is equivalent to linearly interpolating logarithms and exponentiating back.
-- Symlog/log-modulus transforms handle zero and signed values where ordinary logarithms are undefined.
-- Floating-point comparisons need both absolute and relative tolerance; a fixed epsilon is brittle across different value magnitudes.
+- Adobe's current expression documentation states that a property has a pre-expression value and that the `value` attribute accesses that value from within the expression. This is the basis for using native `value` as the observable easing/progress signal.
+- Adobe documents the JavaScript expression engine in After Effects 16.0 as based on ECMAScript 2018, which supports the modern JavaScript constructs used here.
+- The expression-side `Key` reference exposes `index`, `time`, and `value`. Because temporal Bezier handles are not part of that expression-side Key API, this implementation does not pretend to reconstruct them.
+- `nearestKey()` is available across the compatibility range used here. `previousKey()` and `nextKey()` were added only in After Effects 26.0, so they are intentionally not required.
+- Geometric/logarithmic interpolation is equivalent to interpolating logarithms linearly and exponentiating back.
+- Symlog/log-modulus transforms provide a signed, zero-preserving alternative where ordinary logarithms cannot operate.
+- Robust floating-point comparisons benefit from combined absolute and relative tolerances rather than a single fixed epsilon.
 
-Sources:
+## Sources
 
-- Linear and logarithmic interpolation notes: <https://www.cmu.edu/biolphys/deserno/pdf/log_interpol.pdf>
-- D3 symlog scale notes/source: <https://d3js.org/d3-scale/symlog>
-- Log-modulus transform for signed values: <https://blogs.sas.com/content/iml/2014/07/14/log-transformation-of-pos-neg.html>
-- Floating-point tolerance discussion: <https://realtimecollisiondetection.net/blog/?p=89>
+### Adobe / After Effects
+
+- [Adobe Help Center - Expression basics](https://helpx.adobe.com/after-effects/desktop/work-with-expressions/expression-basics/expression-basics.html)
+- [Adobe Help Center - Syntax differences between expression engines](https://helpx.adobe.com/after-effects/desktop/work-with-expressions/expression-basics/legacy-and-extend-script-engine.html)
+- [Adobe Help Center - Expression language reference](https://helpx.adobe.com/after-effects/desktop/work-with-expressions/expression-language-reference/expression-language-reference.html)
+- [After Effects Expression Reference - Property](https://ae-expressions.docsforadobe.dev/objects/property/)
+- [After Effects Expression Reference - Key](https://ae-expressions.docsforadobe.dev/objects/key/)
+- [After Effects Expression Reference - Changelog](https://ae-expressions.docsforadobe.dev/introduction/changelog/)
+
+### Mathematics / Numerical Robustness
+
+- [Markus Deserno - Linear and Logarithmic Interpolation](https://www.cmu.edu/biolphys/deserno/pdf/log_interpol.pdf)
+- [D3 - Symlog scales](https://d3js.org/d3-scale/symlog)
+- [SAS - A log transformation of positive and negative values](https://blogs.sas.com/content/iml/2014/07/14/log-transformation-of-pos-neg.html)
+- [Christer Ericson - Floating-point tolerances revisited](https://realtimecollisiondetection.net/blog/?p=89)
