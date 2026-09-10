@@ -1,10 +1,10 @@
 # Hybrid Exponential Scale - Adaptive Preserve Ease
 
-A non-destructive, keyframe-driven Scale expression for Adobe After Effects that remaps the property's native animation into an adaptive exponential interpolation while preserving the **observable eased progress and timing** of the existing keyframes. It does not bake animation, add Effect Controls, or require a separate controller layer; the Scale keyframes remain the animation UI.
+A non-destructive, keyframe-driven Scale expression for Adobe After Effects that remaps the property's native animation into an adaptive exponential interpolation using the **observable native eased progress** of the existing keyframes as its input. Keyframe times remain unchanged. Independent axes reuse their own recovered progress; inferred coupled axes share weighted progress, and overshoot limits and endpoint snapping can adjust that progress or its resulting value. It does not bake animation, add Effect Controls, or require a separate controller layer; the Scale keyframes remain the animation UI.
 
 Here, **hybrid** refers exclusively to the interpolation strategy itself: the expression uses signed geometric interpolation where logarithmic behavior is well-defined and numerically safe, symlog/log-modulus interpolation around zero and across sign changes, and a smooth transition between those regimes near zero.
 
-> **Important meaning of “preserve ease”:** the expression reuses the normalized progress already produced by After Effects' pre-expression value. It therefore follows the observable timing/easing profile of the native keyframed animation. It does **not** claim to read hidden Graph Editor Bezier handles, nor does it preserve identical post-remap velocity or acceleration in Scale-units-per-second.
+> **Important meaning of “preserve ease”:** the expression reuses the normalized progress already produced by After Effects' pre-expression value. It inherits its progress signal from the native keyframed animation, subject to the documented axis-grouping, overshoot-limiting, and endpoint-snapping rules. It does **not** claim to read hidden Graph Editor Bezier handles, nor does it preserve identical post-remap velocity or acceleration in Scale-units-per-second.
 
 ## What It Does
 
@@ -25,7 +25,11 @@ Here, **hybrid** refers exclusively to the interpolation strategy itself: the ex
 
 ## Compatibility
 
-**After Effects 16.0+**, with:
+**Compatibility target: After Effects 16.0+.**
+
+**Host-tested for this release: After Effects 2025, version 25.6.5x3, on Windows.** Earlier supported versions remain compatibility targets; this validation did not execute them.
+
+Use:
 
 `File > Project Settings > Expressions > Expressions Engine` set to **JavaScript**.
 
@@ -498,7 +502,7 @@ The expression does not rely on one fixed epsilon. Its principal equality tolera
 tol(a, b) = max(1e-7, 1e-6 * max(1, abs(a), abs(b)))
 ```
 
-This combines an absolute floor with a relative tolerance. The absolute component prevents pathological behavior close to zero; the relative component makes the comparison scale with large keyed values.
+With the current constants, `max(1, abs(a), abs(b))` is always at least `1`, so the relative term is always at least `1e-6` and dominates `ABS_TOL = 1e-7`. The effective equality tolerance is therefore `1e-6 * max(1, abs(a), abs(b))`, with a minimum of **`1e-6`**. This floor protects comparisons near zero; above unit magnitude, the tolerance scales with the keyed values. The constants and expression behavior are unchanged.
 
 The dedicated zero band remains intentionally absolute (`0.001`) because it defines where logarithmic/geometric behavior should transition, rather than merely testing floating-point equality.
 
@@ -571,7 +575,7 @@ These are implementation constants, not user-facing controls. The keyframes rema
 
 | Constant | Value | Purpose |
 | --- | ---: | --- |
-| `ABS_TOL` | `1e-7` | Absolute floor for near-equality tests. |
+| `ABS_TOL` | `1e-7` | Configured absolute term; dominated by the relative term in current equality tests. The effective equality floor is `1e-6`. |
 | `REL_TOL` | `1e-6` | Relative component of magnitude-aware equality tests. |
 | `ZERO_ABS` | `1e-3` | Absolute near-zero floor used to build `Z_BAND`. |
 | `Z_BAND` | `0.001` with current constants | Region at/below which ordinary geometric interpolation is considered unsafe. |
@@ -649,6 +653,10 @@ The following examples assume a native normalized progress of `u = 0.5` unless o
 
 ## Validation Performed on This Revision
 
+### Previously Reported Numerical Validation
+
+The two randomized runs described below were reported before the AE host validation in the next subsection. Their original harness and raw results were not independently reproduced in the 10 September 2026 review; the new audit results are recorded separately.
+
 The final expression was extracted back out of this Markdown file, syntax-checked as modern JavaScript, and exercised in a mock After Effects property environment covering:
 
 - scalar, 2D, and 3D return shapes;
@@ -667,12 +675,29 @@ A **500,000-case randomized side-by-side regression test** compared this product
 
 A separate **250,000-case extreme-range stress test** spanned finite magnitudes across hundreds of decimal orders, including cases designed to overflow intermediate subtraction or nonlinear extrapolation while the native input itself remained finite. All 250,000 cases produced finite output after the production version's rescaling and final finite-output safeguards.
 
-These tests validate the JavaScript/numerical logic, not the entire After Effects host runtime. Testing inside an actual After Effects composition remains the authoritative integration check before deployment.
+The preceding tests concern JavaScript/numerical behavior. The following validation additionally exercised the real After Effects host.
+
+### AE 2025 Host Validation — 10 September 2026
+
+The exact expression committed in [be0ce5c](https://github.com/matthewpenkala/Fuck-Adobe/commit/be0ce5cd8e8aab1fe8704af377c2e0c98604bd17) was tested in **After Effects 2025, version 25.6.5x3**, using the modern JavaScript expression engine on Windows. The JavaScript code block was not changed by the documentation update.
+
+- **76 host scenarios and 5,481 sampled property values** completed without expression errors, disabled expressions, or non-finite output.
+- **15,939 component comparisons** matched a separate mathematical oracle within tolerance. Maximum observed absolute difference was approximately **4.46e-10**. The same samples also matched execution of the exact expression in Node.js.
+- Coverage included positive/negative Scale, zero growth/shrinkage, sign crossing, near-zero transition boundaries, scalar and vector shapes, independent axis easing, XY/XZ/YZ/XYZ coupling, non-transitive pair selection, equal-endpoint excursions, hold keys, positive and negative recovered-progress overshoot, Auto Bezier, and continuous multisegment easing.
+- Source keyframe values, times, interpolation types, and temporal-ease settings remained unchanged. A separate saved-project reopen verified **70 cases and 702 additional sampled values**, plus persisted expression text and keyframe/ease metadata.
+- A six-scenario composition rendered successfully: **36 frames at 960 × 540, 12 fps**. The resulting three-second preview passed a full decode check.
+- A separate independent Node.js audit passed **505,082 assertions**, including sign/reversal symmetry, endpoint and midpoint-tie handling, all three-axis grouping graph configurations, near-zero monotonicity, aspect preservation, and positive/negative extrapolation. These are numerical assertions, not additional AE host cases.
+- All accepted host runs returned fresh, run-bound completion evidence and successful owned-process cleanup through the approved automation runner.
+
+Scale returned three components through AE's scripting API on both 2D and 3D layers. A Point Control fixture separately verified a true two-component return; its shared spatial timing was not counted as independent per-axis temporal easing. Scale fixtures supplied that independent-axis coverage.
+
+This supports release on the tested AE 2025 host. It does not establish runtime compatibility for every AE 16.0+ release, an exhaustive test of every possible animation, or a measured performance improvement.
+
 
 ## Known Limits
 
 - **No direct Graph Editor handle access.** Expression-side `Key` objects expose keyframe `index`, `time`, and `value`; they do not expose the full temporal Bezier handle/ease metadata available to scripting APIs. This expression therefore observes the native pre-expression result instead of reconstructing hidden handles.
-- **“Preserve ease” is progress preservation, not identical output velocity.** Applying a nonlinear function to the recovered progress necessarily changes Scale-space velocity and acceleration. The timing profile is inherited; the numeric derivative of the remapped value is not identical to the native derivative.
+- **“Preserve ease” means native progress drives the remap, subject to its documented rules.** Independent axes recover their own progress; coupled axes use a weighted shared value. Overshoot limits can clamp progress, and endpoint snapping can adjust the final result. The nonlinear remap also changes Scale-space velocity and acceleration. Keyframe times remain unchanged, but identical per-axis progress, velocity, and acceleration are not guaranteed in every case.
 - **Extreme overshoot is deliberately bounded.** If mathematically unbounded exponential extrapolation is required, this expression is intentionally safer than that requirement.
 - **Representational overflow falls back to native output.** At pathological floating-point magnitudes where the requested nonlinear value cannot be represented as a finite JavaScript number, the expression prioritizes a finite native component over preserving an unrepresentable exponential result.
 - **Axis grouping is heuristic and endpoint-driven.** Proportional endpoints are interpreted as evidence of coupled scaling. If those endpoints intentionally use different axis easing, the group averages their recovered progress. Use sufficiently non-proportional endpoint ratios if fully independent treatment is required.
