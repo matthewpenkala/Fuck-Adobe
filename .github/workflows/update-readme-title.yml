@@ -1,0 +1,74 @@
+name: Update README repo title
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: '17 7 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: readme-title-main
+  cancel-in-progress: false
+
+jobs:
+  update-title:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - name: Generate title from repository name
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          path = Path("README.md")
+          source = path.read_bytes()
+          start = b"<!-- repo-title:start -->"
+          end = b"<!-- repo-title:end -->"
+          if source.count(start) != 1 or source.count(end) != 1:
+              raise SystemExit("README must contain exactly one pair of repo-title markers.")
+
+          start_at = source.index(start) + len(start)
+          end_at = source.index(end)
+          if end_at < start_at:
+              raise SystemExit("README repo-title markers are out of order.")
+
+          parts = os.environ["GITHUB_REPOSITORY"].split("/")
+          if len(parts) != 2 or not all(parts) or any(c in parts[1] for c in "\r\n"):
+              raise SystemExit("GITHUB_REPOSITORY must be an owner/repository name.")
+          name = re.sub(r"([\\`*_{}\[\]()<>#!|])", r"\\\1", parts[1])
+          newline = b"\r\n" if b"\r\n" in source[start_at:end_at] else b"\n"
+          heading = newline + b"# " + name.encode("utf-8") + newline
+          updated = source[:start_at] + heading + source[end_at:]
+
+          if updated != source:
+              path.write_bytes(updated)
+              print("Updated README repository title.")
+          else:
+              print("README repository title is already current.")
+          PY
+
+      - name: Commit changed title
+        shell: bash
+        run: |
+          if git diff --quiet -- README.md; then
+            exit 0
+          fi
+          git add -- README.md
+          git diff --cached --check
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -m 'docs: sync README title with repository name'
+          git push origin HEAD:main
