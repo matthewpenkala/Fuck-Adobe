@@ -1015,6 +1015,8 @@ At the production defaults, a perfect simple model with only one outer interval 
 
 The exact affine-sample exemption is intentionally different: a constant sampled velocity can remain one continuous sparse move even across a very large key spacing. Use explicit split overrides when that interpretation is not desired.
 
+This exemption uses the **stored sampled secants**, not a nominal affine law before host rounding. For example, at times `[0,1,101,102]`, values authored as `1.1*t` are affine-compatible, but Float32-rounded values exceed the narrow roundoff allowance and adaptive mode splits the 100x gap. That partition change can materially change the gesture clock even though the value perturbations are tiny. Time storage and large coordinate offsets can amplify the same sensitivity. The expression does not assume a universal property precision or time grid, or silently grant uncertain samples an unlimited continuation veto. Use `joinAfter: [2]` for this known gesture, or `grouping: "legacy"` when the broader historical continuation behavior is intended.
+
 ### 10. Split intervals remain value-continuous
 
 A sampled flat separator remains flat. A nonflat interval separated by timing or explicit logic becomes a two-key Bezier bridge. The expression does not teleport and does not invent a Hold.
@@ -1139,7 +1141,7 @@ Native parity must use the expression-visible `time`, authored key times and aut
 
 The historical interactive smoke script is not the approved native entry point. Its modeled six-test result is separate evidence from the new native runner's completion. Rendered behavior and representative-comp performance also require their own checks.
 
-Current native evidence is deliberately qualified: one diagnostic run completed with verified cleanup and zero setup/expression errors, and all **1,389 corrected-domain samples matched**, with maximum normalized residual about **6.01e-14**. That run's authored-key metadata required conversion from scripting readbacks, so it remains exploratory. A later run measured keys with the target disabled but exposed an ExtendScript negative-number serialization defect in its evidence. The corrected serializer includes native round-trip assertions; a fresh final run and the prepared controlled render are pending an available protected host. No rendered acceptance is claimed.
+The final qualified native run on **AE 25.6.5x3** passes all **1,389 corrected-domain samples**, with maximum normalized residual about **6.01e-14**, zero setup/expression errors, native self-sampling positive controls and verified cleanup. Authored-key probes disable the target expression, and native serialization round-trip assertions pass. Earlier exploratory and serialization-invalid evidence is retained separately. A further **162-sample** native job confirms the nominal affine storage sensitivity for Slider/2D Position and verifies that explicit joins restore the intended grouped behavior in those fixtures. Neither numeric gate establishes semantic accuracy. The controlled render is a separate acceptance gate.
 
 ## Performance Notes
 
@@ -1153,6 +1155,7 @@ Those measurements are **not After Effects performance forecasts**. Expression s
 
 - **Automatic grouping remains inference, not semantic metadata.** Scores are engineering evidence, not calibrated probabilities or recovered artistic intent. Manual overrides remain authoritative.
 - **Partitions are discrete.** Continuous model scores reduce a specific hard-threshold cliff but do not make every possible group-boundary edit continuous.
+- **Nominal affine motion can lose the sparse-gap exemption after storage.** The narrow allowance applies to literal sampled secants; Float32 value rounding, time storage and coordinate cancellation can remove it. Use an explicit join for a known continuous sparse move. Native numeric parity does not prove that an intended pre-storage partition survived rounding.
 - **The model family is intentionally finite.** Near-antipodal turns, unobserved multi-turn motion, zero-displacement headings, general helices, changing curvature, arbitrary oscillation, and other dynamics are not universally resolved.
 - **Equally long adjacent large gaps retain the inherited isolated-peak limitation.** A candidate must have useful shorter-cadence evidence on both sides before relative-gap analysis is applied.
 - **Numeric vectors use their supplied component metric.** There is no automatic angle unwrapping, quaternion geometry, perceptual color transform, or screen-space weighting.

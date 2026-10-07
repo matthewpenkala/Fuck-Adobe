@@ -1,8 +1,10 @@
 'use strict';
 const test=require('node:test');
 const assert=require('node:assert/strict');
-const {load,analyze}=require('./load.cjs');
-const f=load().api;
+const vm=require('node:vm');
+const {load,analyze,opts,native}=require('./load.cjs');
+const candidate=load();
+const f=candidate.api;
 const t=[0,.9,1.8,5.8,6.7,7.6];
 const circle=(times,omega)=>times.map(x=>[Math.cos(omega*x),Math.sin(omega*x)]);
 const y=circle(t,.6);
@@ -11,6 +13,15 @@ function supported(record){
  assert.equal(record.split,false,JSON.stringify(record));
  assert.equal(record.model,'constant-turn');
  assert.ok(record.predictionResidual<1e-10,JSON.stringify(record));
+}
+function expression(times,values,currentTime,changes={}){
+ const context=vm.createContext({
+  numKeys:times.length,time:currentTime,value:native(f,times,values,currentTime),
+  key:i=>({time:times[i-1],value:values[i-1]}),
+  thisProperty:{valueAtTime:sampleTime=>native(f,times,values,sampleTime)},
+  settings:opts(f,changes)
+ });
+ return vm.runInContext(candidate.core+'\nObject.assign(CG,settings);\ncgExpression();',context);
 }
 
 test('independent observed flanks may accumulate beyond pi without erasing circle evidence',()=>{
@@ -102,4 +113,44 @@ test('500 generated supported wraps keep prediction and reversal invariance',()=
   supported(evidence(times,values,count));
   supported(evidence(times.slice().reverse().map(x=>times.at(-1)-x),values.slice().reverse(),count));
  }
+});
+
+test('nominal affine Float32 storage can lose the literal sampled-secant exemption at a long gap',()=>{
+ const times=[0,1,101,102],authored=times.map(time=>1.1*time),stored=authored.map(Math.fround);
+ const unrounded=analyze(f,times,authored)[1],rounded=analyze(f,times,stored)[1];
+ assert.equal(unrounded.split,false);assert.equal(unrounded.affineSamples,true);
+ // Float32 is the deliberately modeled storage transformation for this
+ // fixture, not an assumed precision for every supported numeric property.
+ assert.notDeepEqual(stored,authored);
+ assert.equal(rounded.affineSamples,false);assert.equal(rounded.split,true);
+ assert.equal(rounded.reason,'relative-gap');assert.ok(rounded.motionScore>.999999);
+ const legacy=analyze(f,times,stored,{grouping:'legacy'})[1];
+ assert.equal(legacy.split,false);assert.equal(legacy.reason,'motion-continuation');
+});
+
+test('stored-input partition changes can materially change the actual expression clock output',()=>{
+ const times=[0,1,101,102],stored=times.map(time=>Math.fround(1.1*time));
+ const adaptive=expression(times,stored,51,{grouping:'adaptive'});
+ const legacy=expression(times,stored,51,{grouping:'legacy'});
+ // Exercise cgExpression with the published default curve and native key
+ // adapter, rather than equating a tiny secant residual with tiny output error.
+ assert.ok(Number.isFinite(adaptive)&&Number.isFinite(legacy));
+ assert.ok(Math.abs(adaptive-89.86791531969651)<1e-9);
+ assert.ok(Math.abs(legacy-68.90561480126847)<1e-9);
+ assert.ok(Math.abs(adaptive-legacy)>20);
+});
+
+test('explicit join and split remain authoritative for quantized nominal affine samples',()=>{
+ const times=[0,1,101,102],stored=times.map(time=>Math.fround(1.1*time));
+ const joined=analyze(f,times,stored,{joinAfter:[2]})[1];
+ const split=analyze(f,times,stored,{splitAfter:[2]})[1];
+ const both=analyze(f,times,stored,{joinAfter:[2],splitAfter:[2]})[1];
+ assert.equal(joined.split,false);assert.equal(joined.reason,'forced-join');
+ assert.equal(split.split,true);assert.equal(split.reason,'forced-split');
+ assert.equal(both.split,false);assert.equal(both.reason,'forced-join');
+ const legacy=expression(times,stored,51,{grouping:'legacy'});
+ const adaptive=expression(times,stored,51,{grouping:'adaptive'});
+ assert.equal(expression(times,stored,51,{joinAfter:[2]}),legacy);
+ assert.equal(expression(times,stored,51,{splitAfter:[2]}),adaptive);
+ assert.equal(expression(times,stored,51,{joinAfter:[2],splitAfter:[2]}),legacy);
 });

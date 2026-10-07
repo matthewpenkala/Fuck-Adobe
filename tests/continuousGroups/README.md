@@ -10,4 +10,6 @@ No package installation is required. The loader extracts the sole JavaScript blo
 
 Coverage includes observed cumulative circular turning, independently contradictory flanks, transformation/time-reversal invariants, retained antipodal and interval aliasing guards, bounded evidence authority, unavoidable sample aliasing, representable overflow/cancellation in Y excess, closed-loop zero excess, sparse malformed rest probes, and native fallback on genuinely unrepresentable output.
 
+Grouping coverage also preserves the literal sampled-secant contract under explicitly modeled Float32 value storage: a nominal affine law can lose its long-gap exemption after rounding, causing a substantial expression-clock difference from legacy grouping. Explicit `joinAfter` and `splitAfter` remain authoritative for that stored-input example, with join taking precedence. These cases document the representation limitation; they do not assume all numeric properties use Float32 or claim recovery of pre-storage intent.
+
 The tests intentionally distinguish a supported sampled motion model from an animator's intended gesture. Numerical correctness and native-host compatibility do not establish semantic grouping accuracy.
