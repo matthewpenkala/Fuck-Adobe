@@ -60,7 +60,9 @@
     "status": "NOT_ACCEPTED",
     "preparedFrames": 9,
     "coexistencePolicy": "Exclusive",
-    "qualification": "First run failed on nonexistent PNG Sequence output template; protected-host refusals honored."
+    "qualifiedInventoryRunId": "dc96f34e225445edbbdf680e7fe69bf8",
+    "latestPreflightReceipt": "native-render-check-attempt-07.json",
+    "qualification": "First run failed on nonexistent PNG Sequence output template. Native inventory identified an installed8bit PNG template; adapted settings/opaque-alpha job is statically clean. Latest Exclusive preflight refused because another approved run was active; no accepted rendered output claimed."
   },
   "limits": [
     "No human-labeled semantic accuracy",
