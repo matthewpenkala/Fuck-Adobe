@@ -35,7 +35,7 @@ Use:
 
 Adobe documents the JavaScript expression engine introduced with After Effects 16.0 as being based on ECMAScript 2018. The expression intentionally uses modern JavaScript syntax and standard-library features such as `const`, `let`, arrow functions, `Set`, object spread, `Number.isFinite()`, `Number.isInteger()`, `Number.EPSILON`, `Math.cbrt()`, `Math.expm1()`, `Math.log1p()`, and `Math.hypot()`.
 
-The implementation has been validated numerically, in modeled property environments, and in disposable native After Effects 25.6.5 JavaScript-engine jobs. The language target above is broader than the native version tested. See **Validation** for the precise acceptance scope and remaining render/performance limits.
+The implementation has been validated numerically, in modeled property environments, and in disposable native After Effects 25.6.5 JavaScript-engine jobs, including a controlled render. The language target above is broader than the native version tested. See **Validation** for the precise acceptance scope and remaining version/performance limits.
 
 ## Setup / Usage
 
@@ -1094,12 +1094,14 @@ The follow-up review verified all 49 checksummed files in the recovered investig
 - **51 / 51 inherited regression/property tests passed**;
 - **41 / 41 adaptive grouping, invariance, edge-case, and pruning tests passed**;
 - **6 / 6 modeled AE runner-control tests passed**;
-- **20 / 20 maintained regressions passed**, reading the expression from this Markdown file; run `node --test tests/continuousGroups/*.test.cjs` from the repository root;
+- **23 / 23 maintained regressions passed**, reading the expression from this Markdown file; run `node --test tests/continuousGroups/*.test.cjs` from the repository root;
 - a separate review suite passed **20 / 20 tests**, including 2,160 exact ordinary group-output matches against the immutable inherited candidate;
 - Node JavaScript syntax validation passed;
 - TypeScript 5.8.3 `checkJs` against an **ES2018** target passed;
 - the noninteractive native observation job covers **31 fixtures and 1,389 samples** over 24000/1001, 24 and 60 fps, plus a native authored-excursion/self-sampling positive control;
 - the production expression contains no dependency on Node, Python, external packages, persistent state, or random decisions.
+
+These suites overlap; their test counts are not additive measures of independent coverage.
 
 The adaptive tests include the reproduced circular-threshold failure, constant acceleration, unequal-width exponential rate, extra-flank validation, opposing-direction ambiguity, huge/tiny finite secants, affine long-gap behavior, bounded model authority, legacy parity, uniform time/value scaling, translation, orthogonal transformations/reflections, time reversal, unchanged added coordinates, manual precedence, rest sampling, malformed probes, unrepresentable time spans, deterministic evaluation, exact arrivals, closed-loop policy, higher-order leave-one-out validation, and pruning equivalence.
 
@@ -1143,6 +1145,12 @@ The historical interactive smoke script is not the approved native entry point. 
 
 The final qualified native run on **AE 25.6.5x3** passes all **1,389 corrected-domain samples**, with maximum normalized residual about **6.01e-14**, zero setup/expression errors, native self-sampling positive controls and verified cleanup. Authored-key probes disable the target expression, and native serialization round-trip assertions pass. Earlier exploratory and serialization-invalid evidence is retained separately. A further **162-sample** native job confirms the nominal affine storage sensitivity for Slider/2D Position and verifies that explicit joins restore the intended grouped behavior in those fixtures. Neither numeric gate establishes semantic accuracy. The controlled render is a separate acceptance gate.
 
+### Controlled rendered behavior
+
+A separate disposable **AE 25.6.5x3** job rendered **nine 256x256 RGBA8 PNG frames** at 60 fps: the repaired expression, a static numerical oracle, and the immutable pre-repair expression at three probe times. The fixture uses the corroborated circular samples at `[0,.9,1.8,5.8,6.7,7.6]`, Float32-authored Position values, an opaque black background, and disabled motion blur. Actual output settings, native Position readbacks, completed queue items, fresh output files, and cleanup were verified.
+
+After verifying the PNG encoding and fully opaque alpha, the repaired/oracle decoded RGB images matched exactly at every probe: **maximum channel error 0 and centroid distance 0 pixels**. The pre-repair positive control differed by approximately **45.93, 27.48, and 9.83 pixels** in centroid position, demonstrating that this comparison detects the repaired grouping behavior. This is a controlled rendering check, not a human-intent benchmark, a promise of a circular interpolated path, or representative-composition performance testing.
+
 ## Performance Notes
 
 Adaptive classification performs more work than the previous three-secant continuation test. The model window is bounded to at most four intervals per side, motion features are cached only for the current evaluation, and the higher-order QR model is skipped when its maximum possible merit cannot beat an already-supported simpler model.
@@ -1170,7 +1178,7 @@ Those measurements are **not After Effects performance forecasts**. Expression s
 - **Closed-loop endpoint-relative excess is zero.** When the group's first and last values are identical, the global excess scale is zero by design.
 - **Large key counts cost more per evaluation.** Adaptive grouping has bounded local model windows but the property still must be scanned and group interpolation still scales with group size.
 - **Floating-point information already lost by representation cannot be recovered.** Defensive fallbacks prioritize finite native output over pretending otherwise.
-- **Some extreme intermediate excesses remain unrepresentable.** Enormous handles combined with nearly collapsed carrier knots can overflow the correction or its subtraction even when a tiny endpoint displacement could make a mathematically scaled final contribution finite. The current scalar-excess representation falls back to native output; it is not arbitrary-precision arithmetic.
+- **Some extreme intermediate excesses remain unrepresentable.** Enormous handles or an ill-conditioned carrier can make the correction or delta-minus-correction unrepresentable before multiplication by a tiny endpoint displacement, even when a fully scaled final contribution could be finite. The current scalar-excess representation falls back to native output; it is not arbitrary-precision arithmetic.
 - **AE sampling uses the host's time/value representation.** Exact arrival means the actual authored host key time and value, not an unrounded decimal supplied by a separate scripting fixture.
 - **Modern JavaScript only.** Legacy ExtendScript is not a compatibility target.
 - **Native version coverage is limited to AE 25.6.5.** Representative-comp profiling and artistic acceptance remain environment-specific checks, even after numerical host parity.
