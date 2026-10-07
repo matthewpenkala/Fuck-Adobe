@@ -1,0 +1,145 @@
+{
+  "schema": 1,
+  "reviewDate": "2026-10-06",
+  "reviewedBaselineCommit": "aec1d9d7418ab765a305774d7ff87df95c55db4b",
+  "normalizedExpressionSha256": "045b6c79f0915bc4907091b1fbc678733b34e7233bf3c9c0a031b0bb161cdddc",
+  "normalization": "LF line endings and one final newline",
+  "maintainedTests": {
+    "passed": 23,
+    "failed": 0,
+    "command": "node --test tests/continuousGroups/*.test.cjs"
+  },
+  "recoveredTests": {
+    "inherited": 51,
+    "adaptive": 41,
+    "modeledHistoricalRunner": 6,
+    "failed": 0
+  },
+  "reviewSuite": {
+    "passed": 20,
+    "ordinaryExactGroupComparisons": 2160,
+    "overlapsMaintainedTests": true
+  },
+  "independentNumericalChecks": {
+    "referenceCases": 1522,
+    "passed": true,
+    "exactBinaryBezierCases": 280,
+    "boundedSplineSamples": 91154,
+    "rangeViolations": 0
+  },
+  "staticChecks": {
+    "expressionTarget": "ES2018",
+    "jobTarget": "ES3",
+    "typescript": "5.8.3",
+    "eslint": "10.12.0",
+    "errors": 0,
+    "warnings": 0
+  },
+  "native": {
+    "hostVersion": "25.6.5x3",
+    "runner": "Reviewed personal Invoke-AeAutomation.ps1",
+    "runId": "3a38526fe7224240b7c04df0997a1ee9",
+    "status": "PASS",
+    "fixtures": 31,
+    "frameRates": [
+      23.976023976023978,
+      24,
+      60
+    ],
+    "samplesPassed": 1389,
+    "samplesFailed": 0,
+    "maxNormalizedResidual": 6.012060716757638e-14,
+    "tolerance": 0.000002,
+    "expressionSetupFailures": 0,
+    "selfSamplingPositiveControlPassed": true,
+    "cleanup": "VERIFIED",
+    "authoredMetadataMode": "target-disabled-expression-facing-keys",
+    "qualification": "Exact source/fixture identity, target-disabled authored keys, measured expression clock and native serializer round-trip assertions. Earlier exploratory/serializer-invalid records retained separately."
+  },
+  "render": {
+    "status": "PASS",
+    "runId": "2cb202be2d774599aa637a37e69cf4bf",
+    "hostVersion": "25.6.5x3",
+    "expressionSha256": "045b6c79f0915bc4907091b1fbc678733b34e7233bf3c9c0a031b0bb161cdddc",
+    "jobSourceSha256": "eeb9e6c03f75f40754b3325cc4bbd19e4a4076056d0173e7eebf3f3003f8931b",
+    "cleanupStatus": "VERIFIED",
+    "frames": 9,
+    "details": [
+      {
+        "probe": 0,
+        "time": 2.5,
+        "maxChannelError": 0,
+        "centroidErrorPixels": 0,
+        "positiveControlChangedPixels": 338,
+        "positiveControlCentroidDifferencePixels": 45.9329437862962,
+        "fileSha256": [
+          "02443eb92ca81ad508caa74abcca8bf1a03423d07e71e3d5259b9884965c53bf",
+          "02443eb92ca81ad508caa74abcca8bf1a03423d07e71e3d5259b9884965c53bf",
+          "2dfb38430f9e1ef9abf86f9ca01830f6ab73b49e28d2a5b65de8f89bff50c925"
+        ]
+      },
+      {
+        "probe": 1,
+        "time": 3.8,
+        "maxChannelError": 0,
+        "centroidErrorPixels": 0,
+        "positiveControlChangedPixels": 338,
+        "positiveControlCentroidDifferencePixels": 27.483263426279514,
+        "fileSha256": [
+          "9e4b3bb4f1cd7fb33b7ea0df1a071429a8553d5ff2b6268930f439c37c95a0fa",
+          "9e4b3bb4f1cd7fb33b7ea0df1a071429a8553d5ff2b6268930f439c37c95a0fa",
+          "b3afd7a418d7cd74d4e8fcfa9586f8d70c6f643076c5837a10a30a4d5f3dc785"
+        ]
+      },
+      {
+        "probe": 2,
+        "time": 5,
+        "maxChannelError": 0,
+        "centroidErrorPixels": 0,
+        "positiveControlChangedPixels": 295,
+        "positiveControlCentroidDifferencePixels": 9.828725485795445,
+        "fileSha256": [
+          "0f732ed853a8bc7af39878536b5e09effbc8bbcee4ec73f4879be1c31b512dca",
+          "0f732ed853a8bc7af39878536b5e09effbc8bbcee4ec73f4879be1c31b512dca",
+          "abbe0eba9455050e31866d1a08731ad89993b8118c816c5199f9e46713b865c2"
+        ]
+      }
+    ],
+    "boundedCleanupPhaseExpiries": [
+      {
+        "observedElapsed": 14.8461355,
+        "phase": "natural-exit-grace",
+        "partialObservationCount": 0,
+        "reason": "Process observation deadline expired during provider query.",
+        "deadlineElapsed": 14.6908805
+      }
+    ],
+    "pixelEncoding": "PNG RGBA8, fully opaque black background; compare decoded RGB after proving alpha255",
+    "opaqueAlphaVerified": true,
+    "scope": "Controlled decoded-pixel behavior, not artistic acceptance or representative-comp performance."
+  },
+  "limits": [
+    "No human-labeled semantic accuracy",
+    "Nominal affine grouping can change after host storage; explicit joins available",
+    "No representative-comp performance claim",
+    "Native version coverage limited to AE25.6.5"
+  ],
+  "nativeNominalAffineStorage": {
+    "status": "CONFIRMED_DOCUMENTED_LIMIT",
+    "runId": "b04d5be3e5d14bdab41b40a35b67364e",
+    "samplesPassed": 162,
+    "samplesFailed": 0,
+    "maxNormalizedResidual": 4.274358644806853e-15,
+    "qualification": "Adaptive splits stored nominal-affine100x fixtures; explicit joins restore legacy group/output. Literal sampled-secant contract retained; no universal input-precision or time-grid assumption."
+  },
+  "cleanupEvidenceTests": {
+    "passed": 5,
+    "failed": 0,
+    "qualification": "Reviewed monotonic clock, explicit arrays and coherent permitted preliminary expiry transitions versus malformed/unknown/final/failed cleanup."
+  },
+  "renderCleanupEvidenceTests": {
+    "passed": 5,
+    "failed": 0,
+    "qualification": "Offline Python verifier rejects malformed clock/array/boolean-budget/cleanup/expiry evidence."
+  }
+}

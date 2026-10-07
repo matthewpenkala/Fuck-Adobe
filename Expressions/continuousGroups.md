@@ -35,7 +35,7 @@ Use:
 
 Adobe documents the JavaScript expression engine introduced with After Effects 16.0 as being based on ECMAScript 2018. The expression intentionally uses modern JavaScript syntax and standard-library features such as `const`, `let`, arrow functions, `Set`, object spread, `Number.isFinite()`, `Number.isInteger()`, `Number.EPSILON`, `Math.cbrt()`, `Math.expm1()`, `Math.log1p()`, and `Math.hypot()`.
 
-The implementation has been extensively validated numerically and in modeled expression-property environments. **This revision has not been executed or rendered inside a native After Effects host during this audit.** See **Validation** and **Known Limits** below.
+The implementation has been validated numerically, in modeled property environments, and in disposable native After Effects 25.6.5 JavaScript-engine jobs, including a controlled render. The language target above is broader than the native version tested. See **Validation** for the precise acceptance scope and remaining version/performance limits.
 
 ## Setup / Usage
 
@@ -47,6 +47,8 @@ The implementation has been extensively validated numerically and in modeled exp
 6. If the source animation relies on native temporal handles, spatial path tangents, or Hold interpolation, verify that replacing those semantics is intended before applying this expression.
 
 A split does not teleport between values. A nonflat separated interval becomes an ordinary two-key Bezier bridge; a sampled flat rest remains flat.
+
+Use continuous numeric properties whose component metric makes sense for the animation. A numeric dropdown or layer index is not made continuous by this expression. Position is measured in the property's supplied coordinates, including its parent-relative coordinates; the grouping metric is not automatically screen-space distance. Separated Position followers run independently on their own scalar keys, so their group boundaries can differ from a combined Position property.
 
 ## Expression
 
@@ -97,8 +99,11 @@ function cgEqual(a, b) {
     // Keyed values are validated by the adapter. Guard malformed native rest
     // probes here without rescanning every valid key's numeric components.
     if (typeof a === "number") return typeof b === "number" && a === b;
-    return Array.isArray(a) && Array.isArray(b) && a.length === b.length &&
-        a.every((v, i) => v === b[i]);
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    // An indexed comparison must visit holes in malformed native arrays too.
+    // Array.every() would silently skip them and could accept a false rest.
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
 }
 
 function cgMix(a, b, u) {
@@ -113,6 +118,15 @@ function cgMix(a, b, u) {
     };
     if (typeof a === "number") return mix(a, b);
     return a.map((v, i) => mix(v, b[i]));
+}
+
+function cgAddExcess(base, first, last, excess) {
+    if (excess === 0 || first === last) return base;
+    const result = base + (last - first) * excess;
+    if (Number.isFinite(result)) return result;
+    // Opposite-sign endpoints or a cancelling product can overflow before
+    // the final sum. Halve all value terms before restoring their units.
+    return (base / 2 + (last / 2 - first / 2) * excess) * 2;
 }
 
 // Standard cubic-Bezier easing domain. Reversed Y handles are valid too.
@@ -449,8 +463,10 @@ function cgMotionEvidence(i, gaps, values, left, right, cache) {
         const speed = (speedL + speedR) / 2;
         assess("constant-turn", r => {
             const phase = omega * (r.midpoint - L.midpoint);
-            // Do not trust unobserved turns of a half-revolution or more.
-            if (Math.abs(phase) >= Math.PI || omega * r.width >= Math.PI) return null;
+            // Each interval must have a short-arc interpretation. Farther
+            // observed flanks can accumulate more than pi from the fit origin;
+            // they validate that accumulated phase rather than aliasing it.
+            if (omega * r.width >= Math.PI) return null;
             const magnitude = speed * cgSinc(omega * r.width / 2);
             return L.feature.unit.map((v, d) => magnitude *
                 (v * Math.cos(phase) + basis[d] * Math.sin(phase)));
@@ -771,7 +787,8 @@ function cgGroup(currentTime, times, values, first, last, settings) {
     const curve = settings.curve, carrier = cgCarrierCurve(curve);
     if (last === first + 1) return cgMix(values[first], values[last], cgBezier(u, curve));
     const freedom = cgClamp01(settings.timingFreedom);
-    const hasExcess = curve[1] !== carrier[1] || curve[3] !== carrier[3];
+    const hasExcess = (curve[1] !== carrier[1] || curve[3] !== carrier[3]) &&
+        !cgEqual(values[first], values[last]);
     // Exact authored times are authoritative. Carrier progress alone can round
     // to a knot while the unrestricted-Y residual is still changing nearby.
     if (freedom === 0) {
@@ -800,7 +817,9 @@ function cgGroup(currentTime, times, values, first, last, settings) {
     if (hasExcess) {
         const deltas = x.map((v, i) => freedom === 0 ? samples[i].delta :
             cgCurveDelta(cgBezierParameter(v, carrier[1], carrier[3]), curve));
-        excess = current.delta - cgNaturalValue(x, deltas, cgNaturalSecond(x, deltas), segment, q);
+        // Reuse the scaled spline retry: unrestricted finite Y handles can
+        // overflow correction derivatives while the correction is finite.
+        excess = current.delta - cgSplineValue(x, deltas, segment, q, "smooth");
     }
     const vectors = values.slice(first, last + 1).map(cgVector);
     const result = vectors[0].map((unused, dimension) => {
@@ -809,7 +828,7 @@ function cgGroup(currentTime, times, values, first, last, settings) {
         // slopes can erase small differences elsewhere and break continuity.
         const y = vectors.map(v => v[dimension]);
         const interpolated = cgSplineValue(x, y, segment, q, settings.interpolation);
-        return hasExcess ? interpolated + (y[y.length - 1] - y[0]) * excess : interpolated;
+        return hasExcess ? cgAddExcess(interpolated, y[0], y[y.length - 1], excess) : interpolated;
     });
     return typeof values[first] === "number" ? result[0] : result;
 }
@@ -967,7 +986,7 @@ A keyed displacement divided by its duration is an **interval-average velocity**
 | --- | --- | --- |
 | **Affine samples** | Roundoff-compatible constant sampled velocity across the local window. | Exception is intentionally extremely narrow; it says only that the sampled secants are affine-compatible. |
 | **Linear velocity** | Constant acceleration / quadratic position. | Not extrapolated through opposing-direction ambiguity. |
-| **Constant turn** | Short-arc constant-rate rotation in the plane of the outer directions. | Corrects chord-speed sampling with `sinc(omega*h/2)` and rejects unobserved half-turn-or-larger spans. |
+| **Constant turn** | Constant-rate rotation supported by individually observed short intervals in the plane of the outer directions. | Corrects chord speed with `sinc(omega*h/2)`, rejects ambiguous near-antipodal training directions and unobserved half-turn-or-larger intervals, and validates additional flanks without mistaking their accumulated rotation for one unobserved gap. |
 | **Exponential rate** | Fixed-direction exponential acceleration/deceleration. | Integrates over interval width using `sinh(k*h/2)/(k*h/2)` rather than fitting raw log secant speeds as if durations were equal. |
 | **Quadratic velocity** | Cubic position with enough surrounding observations. | Requires at least two flank intervals per side, excludes the candidate from fitting, validates every outer sample through leave-one-out refits, and receives reduced support for model complexity. |
 | **Near-constant prior** | Modest unmodeled speed or direction change that may still be one gesture. | Soft, bounded, and receives no extra support merely because more keys exist. |
@@ -996,6 +1015,8 @@ At the production defaults, a perfect simple model with only one outer interval 
 
 The exact affine-sample exemption is intentionally different: a constant sampled velocity can remain one continuous sparse move even across a very large key spacing. Use explicit split overrides when that interpretation is not desired.
 
+This exemption uses the **stored sampled secants**, not a nominal affine law before host rounding. For example, at times `[0,1,101,102]`, values authored as `1.1*t` are affine-compatible, but Float32-rounded values exceed the narrow roundoff allowance and adaptive mode splits the 100x gap. That partition change can materially change the gesture clock even though the value perturbations are tiny. Time storage and large coordinate offsets can amplify the same sensitivity. The expression does not assume a universal property precision or time grid, or silently grant uncertain samples an unlimited continuation veto. Use `joinAfter: [2]` for this known gesture, or `grouping: "legacy"` when the broader historical continuation behavior is intended.
+
 ### 10. Split intervals remain value-continuous
 
 A sampled flat separator remains flat. A nonflat interval separated by timing or explicit logic becomes a two-key Bezier bridge. The expression does not teleport and does not invent a Hold.
@@ -1010,17 +1031,22 @@ If authored Y handles extend below 0 or above 1, the difference between the unre
 
 This explicit excess can intentionally defeat the ordinary bounds of `shape` or `shapeC2`. A closed loop whose first and last group values are identical has zero endpoint displacement, so this endpoint-relative global excess is also zero by design.
 
+Closed groups skip the irrelevant excess correction entirely, including when enormous finite Y handles would make that correction overflow. Other groups reuse the natural spline's scaled retry for the correction. The final excess addition retains ordinary finite arithmetic and retries overflow/cancellation in halved value units.
+
 ### 12. Numerical failure degrades to native output
 
 The production implementation includes several defensive safeguards:
 
 - opposite-sign finite endpoints can be mixed without overflowing their difference when the intended result is still representable;
+- endpoint-relative excess addition retries avoidable difference/product overflow and cancellation while preserving the ordinary finite fast path;
+- a closed group's zero endpoint displacement bypasses its excess solve, and nonclosed corrections reuse the natural-cubic scaled retry;
 - PCHIP endpoint/interior slope calculations are normalized before vulnerable weighted arithmetic;
 - quintic tangent limiting uses scaled ratios so large intermediates do not create an avoidable `Infinity / Infinity`;
 - multi-key spline evaluation retries in power-of-two-scaled units only after a non-finite derivative/result, and declines the retry if scaling would erase a nonzero value or merge distinct waypoints;
 - adjacent key-time differences are required to remain finite, so finite timestamps whose subtraction overflows fall back to native output;
 - group and bridge durations are checked before normalized progress is computed;
 - malformed native rest probes cannot trigger an invalid vector-length access;
+- indexed rest comparisons visit sparse array holes instead of accepting them through `Array.every()`;
 - malformed values, dimension mismatches, collapsed carrier knots, and unrepresentable final results preserve the current native/pre-expression value rather than fabricating a custom answer.
 
 ### 13. Exact keys and simple paths avoid unnecessary work
@@ -1039,6 +1065,7 @@ Those paths avoid native rest probes when the classification result cannot affec
 | Ordinary multi-key move | One group clock unless rest/timing/manual evidence creates a boundary. |
 | Exact key with `timingFreedom: 0` | Returns the exact authored keyed value. |
 | `[0,1,5,6]` circular samples at 8 degrees/second | Adaptive mode recognizes short-arc continuation; legacy mode reproduces the previous hard-threshold split. |
+| Circle at 0.6 radians/second with `[0,.9,1.8,5.8,6.7,7.6]` | Extra corroborating flanks do not invalidate the central constant-turn explanation merely because cumulative observed rotation exceeds pi. |
 | `p(t)=t^2` at `[0,1,5,6]` | Linear-velocity model recognizes the constant-acceleration continuation. |
 | Unequal interval widths with exponential velocity | Integrated exponential model accounts for the width-dependent secant bias. |
 | Cubic position with only four keys | No cubic self-fit is invented; the timing split can remain. |
@@ -1062,15 +1089,19 @@ The production review covered the inherited interpolation engine, the adaptive g
 
 ### Final production-source checks
 
-The production-labeled source was rebuilt from the fully tested adaptive candidate with **no runtime code change** beyond the release header, then revalidated from source:
+The follow-up review verified all 49 checksummed files in the recovered investigation package against its manifest, reconciled that candidate with repository commit `aec1d9d`, and repaired five demonstrated defect classes: observed-turn rejection, overflowing excess addition, closed-loop excess evaluation, correction retry bypass, and sparse rest equality. The repaired source was then checked directly:
 
 - **51 / 51 inherited regression/property tests passed**;
 - **41 / 41 adaptive grouping, invariance, edge-case, and pruning tests passed**;
 - **6 / 6 modeled AE runner-control tests passed**;
+- **23 / 23 maintained regressions passed**, reading the expression from this Markdown file; run `node --test tests/continuousGroups/*.test.cjs` from the repository root;
+- a separate review suite passed **20 / 20 tests**, including 2,160 exact ordinary group-output matches against the immutable inherited candidate;
 - Node JavaScript syntax validation passed;
 - TypeScript 5.8.3 `checkJs` against an **ES2018** target passed;
-- the AE smoke runner was regenerated with **25 fixtures and 1,089 planned checks**;
+- the noninteractive native observation job covers **31 fixtures and 1,389 samples** over 24000/1001, 24 and 60 fps, plus a native authored-excursion/self-sampling positive control;
 - the production expression contains no dependency on Node, Python, external packages, persistent state, or random decisions.
+
+These suites overlap; their test counts are not additive measures of independent coverage.
 
 The adaptive tests include the reproduced circular-threshold failure, constant acceleration, unequal-width exponential rate, extra-flank validation, opposing-direction ambiguity, huge/tiny finite secants, affine long-gap behavior, bounded model authority, legacy parity, uniform time/value scaling, translation, orthogonal transformations/reflections, time reversal, unchanged added coordinates, manual precedence, rest sampling, malformed probes, unrepresentable time spans, deterministic evaluation, exact arrivals, closed-loop policy, higher-order leave-one-out validation, and pruning equivalence.
 
@@ -1087,7 +1118,9 @@ The rerun reported maximum unit-vector absolute error about **1.11e-16**, maximu
 
 ### Interpolation-core non-regression
 
-The adaptive work intentionally did not replace the existing spline/Bezier engine. Previous production validation of that core included:
+The follow-up repairs preserve the existing spline/Bezier engine and ordinary finite arithmetic. Fresh additional checks covered **280 Bezier inversions** against an independent 1,200-bit fixed-point reference and **91,154 bounded-spline samples** across 800 seeded datasets. The largest measured Bezier-parameter relative error was about 3.664e-15; no tested finite bounded-spline result exceeded its adjacent component range beyond a 5e-14 relative roundoff allowance.
+
+The recovered earlier investigation reported the following additional core validation; these are historical results, not newly executed counts:
 
 - **700** Bezier-inversion cases against independent 100-digit bisection;
 - **49,194 scalar spline comparisons** over 250 datasets against independent PCHIP, natural-cubic, and Bernstein/quintic reference constructions;
@@ -1102,7 +1135,21 @@ Legacy mode also reproduced the previous classifier's complete records across **
 
 A 3,250-case synthetic atlas was used as a behavior probe, **not** as a human-labeled accuracy benchmark. It recorded substantial improvements for constant acceleration, short-arc circular motion, exponential rate, and cubic position when enough independent flank evidence exists. Sparse cubic samples, general helices, and unmodeled rate humps remain limited or mixed, which is reflected in the documented limits rather than hidden by progressively more permissive fitting.
 
-**Native-host limitation:** the supplied AE runner's control flow and cleanup were tested in a modeled environment, but the 25-fixture suite has **not** been executed inside After Effects. Mathematical/JavaScript validation is therefore strong; native host/render acceptance remains a separate final environment-specific gate.
+### Native host observations
+
+The adapted job runs through the approved disposable-job runner, with fresh source/run-correlated completion and verified cleanup. It tests Slider, true 2D Point Control, 2D/3D Position, 4D Color, separated X Position, Hold-source replacement, all spline modes, timing freedom, adaptive/legacy grouping, sampled rests and closed-loop huge Y handles.
+
+Native parity must use the expression-visible `time`, authored key times and authored key values measured from the host. Requested decimal times and original doubles are not an interchangeable oracle: AE quantizes stored times/values, and 2D Position has three-component scripting storage with an inactive zero Z component. Cross-property key probes must disable the target expression while measuring authored data. Numerical tolerance remains `2e-6 * max(1, abs(expected))`; measuring the correct inputs does not relax it.
+
+The historical interactive smoke script is not the approved native entry point. Its modeled six-test result is separate evidence from the new native runner's completion. Rendered behavior and representative-comp performance also require their own checks.
+
+The final qualified native run on **AE 25.6.5x3** passes all **1,389 corrected-domain samples**, with maximum normalized residual about **6.01e-14**, zero setup/expression errors, native self-sampling positive controls and verified cleanup. Authored-key probes disable the target expression, and native serialization round-trip assertions pass. Earlier exploratory and serialization-invalid evidence is retained separately. A further **162-sample** native job confirms the nominal affine storage sensitivity for Slider/2D Position and verifies that explicit joins restore the intended grouped behavior in those fixtures. Neither numeric gate establishes semantic accuracy. The controlled render is a separate acceptance gate.
+
+### Controlled rendered behavior
+
+A separate disposable **AE 25.6.5x3** job rendered **nine 256x256 RGBA8 PNG frames** at 60 fps: the repaired expression, a static numerical oracle, and the immutable pre-repair expression at three probe times. The fixture uses the corroborated circular samples at `[0,.9,1.8,5.8,6.7,7.6]`, Float32-authored Position values, an opaque black background, and disabled motion blur. Actual output settings, native Position readbacks, completed queue items, fresh output files, and cleanup were verified.
+
+After verifying the PNG encoding and fully opaque alpha, the repaired/oracle decoded RGB images matched exactly at every probe: **maximum channel error 0 and centroid distance 0 pixels**. The pre-repair positive control differed by approximately **45.93, 27.48, and 9.83 pixels** in centroid position, demonstrating that this comparison detects the repaired grouping behavior. This is a controlled rendering check, not a human-intent benchmark, a promise of a circular interpolated path, or representative-composition performance testing.
 
 ## Performance Notes
 
@@ -1116,6 +1163,7 @@ Those measurements are **not After Effects performance forecasts**. Expression s
 
 - **Automatic grouping remains inference, not semantic metadata.** Scores are engineering evidence, not calibrated probabilities or recovered artistic intent. Manual overrides remain authoritative.
 - **Partitions are discrete.** Continuous model scores reduce a specific hard-threshold cliff but do not make every possible group-boundary edit continuous.
+- **Nominal affine motion can lose the sparse-gap exemption after storage.** The narrow allowance applies to literal sampled secants; Float32 value rounding, time storage and coordinate cancellation can remove it. Use an explicit join for a known continuous sparse move. Native numeric parity does not prove that an intended pre-storage partition survived rounding.
 - **The model family is intentionally finite.** Near-antipodal turns, unobserved multi-turn motion, zero-displacement headings, general helices, changing curvature, arbitrary oscillation, and other dynamics are not universally resolved.
 - **Equally long adjacent large gaps retain the inherited isolated-peak limitation.** A candidate must have useful shorter-cadence evidence on both sides before relative-gap analysis is applied.
 - **Numeric vectors use their supplied component metric.** There is no automatic angle unwrapping, quaternion geometry, perceptual color transform, or screen-space weighting.
@@ -1130,8 +1178,10 @@ Those measurements are **not After Effects performance forecasts**. Expression s
 - **Closed-loop endpoint-relative excess is zero.** When the group's first and last values are identical, the global excess scale is zero by design.
 - **Large key counts cost more per evaluation.** Adaptive grouping has bounded local model windows but the property still must be scanned and group interpolation still scales with group size.
 - **Floating-point information already lost by representation cannot be recovered.** Defensive fallbacks prioritize finite native output over pretending otherwise.
+- **Some extreme intermediate excesses remain unrepresentable.** Enormous handles or an ill-conditioned carrier can make the correction or delta-minus-correction unrepresentable before multiplication by a tiny endpoint displacement, even when a fully scaled final contribution could be finite. The current scalar-excess representation falls back to native output; it is not arbitrary-precision arithmetic.
+- **AE sampling uses the host's time/value representation.** Exact arrival means the actual authored host key time and value, not an unrounded decimal supplied by a separate scripting fixture.
 - **Modern JavaScript only.** Legacy ExtendScript is not a compatibility target.
-- **No native AE host/render certification was performed in this audit.** Final visual acceptance and representative-comp profiling remain environment-specific release checks.
+- **Native version coverage is limited to AE 25.6.5.** Representative-comp profiling and artistic acceptance remain environment-specific checks, even after numerical host parity.
 
 ## Revision Highlights
 
@@ -1145,6 +1195,8 @@ Relative to the previous production file, this revision:
 6. adds finite adjacent-time-span, group-duration, bridge-duration, and malformed-rest-probe safeguards;
 7. preserves the existing spline, carrier, Bezier inversion, `timingFreedom`, explicit overshoot, manual override, and native-fallback contracts;
 8. expands regression, invariance, high-precision reference, synthetic behavior, and native-runner fixture coverage.
+
+The follow-up repair retains those defaults and model parameters. It distinguishes observed cumulative turning from an unobserved interval, recovers representable endpoint-relative excess after avoidable overflow, bypasses closed-loop zero excess, reuses the existing correction retry, and rejects sparse malformed rest probes. Maintained regressions are in [`tests/continuousGroups`](../tests/continuousGroups/README.md).
 
 ## Research / Numerical Basis
 
