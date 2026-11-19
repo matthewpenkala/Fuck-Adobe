@@ -2,6 +2,12 @@
 
 Fade a shot up from black, leave it clear, then fade it back down with one black solid. This multi-key successor to the **C∞ (C-infinity) dip to black** follows your Opacity keyframes and uses the surrounding frames to ease into and out of each fade. A fade keyed at a visible cut can still land on exactly black.
 
+## Why use Afterglow?
+
+A fade can look smooth in the Graph Editor and still feel rushed near black. Try fading a white frame under a black solid. At 50% Opacity in a linear-light blend, half the light still gets through, and that gray looks brighter than halfway to black. Afterglow’s default lightness correction takes out more light through the middle of the fade, leaving smaller changes as the last detail disappears.
+
+The timing solves a separate editing problem. An interior key can mark the beat where you want to *feel* the fade, while the last visible frame may need to be completely black for the cut. Afterglow lets the motion ease across interior keys and fits it to the visible frames when you key an endpoint at the cut. You can retime the shot by moving the keys without rebuilding the easing handles for each new duration.
+
 ## Apply it
 
 1. Place a comp-sized black solid above the footage and set its blending mode to **Normal**.
