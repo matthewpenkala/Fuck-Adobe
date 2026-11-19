@@ -35,13 +35,14 @@ Copy this block onto **Transform > Opacity**.
 ```javascript
 // Transform > Opacity | JavaScript expression engine
 // Smooth every changing pair. Preserve stationary stretches and fit fades at visible cuts.
-const startKey = 0;               // 0 processes the whole track. A positive index isolates one pair.
+const startKey = 0;               // 0 processes the whole track. With 3+ keys, a positive index isolates one pair.
 const model = "blackSolid";       // "blackSolid", "footageOverBlack", or "opacity".
 const remapExistingCurve = true;  // Sample authored easing. False uses elapsed time as the input curve.
 const perceptualAmount = 0.65;    // 0 uses ordinary Opacity. 1 applies full CIE L* correction.
 
 const luminanceToe = 216 / 24389;
 const lightnessSlope = 24389 / 27;
+const curveSampleSegments = 24;
 
 // Integral of the quintic step 6x^5 - 15x^4 + 10x^3.
 function integratedStep(x) {
@@ -53,34 +54,40 @@ function integratedStep(x) {
 function roundedRamp(x, radius) {
     if (x <= -radius) return 0;
     if (x >= radius) return x;
-    return 2 * radius * integratedStep((x + radius) / (2 * radius));
+    const width = 2 * radius;
+    return width * integratedStep((x + radius) / width);
 }
 
-function automaticProgress(u, radius, duration, first, opacitySpan) {
+function normalizedOpacityProgress(opacity, firstOpacity, span) {
+    return clamp((opacity - firstOpacity) / span, 0, 1);
+}
+
+function sampleAuthoredProgress(index, first, duration, span) {
+    if (index === 0) return 0;
+    if (index === curveSampleSegments) return 1;
+
+    const opacity = valueAtTime(first.time + duration * index / curveSampleSegments);
+    return normalizedOpacityProgress(opacity, first.value, span);
+}
+
+function automaticProgress(u, radius, first, duration, span) {
     if (u <= -radius) return 0;
     if (u >= 1 + radius) return 1;
     if (!remapExistingCurve) return roundedRamp(u, radius) - roundedRamp(u - 1, radius);
 
     // Approximate the authored curve with short ramps. Round only ramps in the kernel's reach.
-    const segments = 24;
-    const left = Math.max(0, Math.floor((u - radius) * segments));
-    const right = Math.min(segments, Math.ceil((u + radius) * segments));
-    function sample(index) {
-        if (index === 0) return 0;
-        if (index === segments) return 1;
-        const authored = valueAtTime(first.time + duration * index / segments);
-        return clamp((authored - first.value) / opacitySpan, 0, 1);
-    }
+    const firstSample = Math.max(0, Math.floor((u - radius) * curveSampleSegments));
+    const lastSample = Math.min(curveSampleSegments, Math.ceil((u + radius) * curveSampleSegments));
+    let previousProgress = sampleAuthoredProgress(firstSample, first, duration, span);
+    let progress = previousProgress;
+    let previousRamp = roundedRamp(u - firstSample / curveSampleSegments, radius);
 
-    let previous = sample(left);
-    let progress = previous;
-    let leftRamp = roundedRamp(u - left / segments, radius);
-    for (let i = left + 1; i <= right; i++) {
-        const next = sample(i);
-        const rightRamp = roundedRamp(u - i / segments, radius);
-        progress += (next - previous) * (leftRamp - rightRamp) * segments;
-        previous = next;
-        leftRamp = rightRamp;
+    for (let i = firstSample + 1; i <= lastSample; i++) {
+        const nextProgress = sampleAuthoredProgress(i, first, duration, span);
+        const nextRamp = roundedRamp(u - i / curveSampleSegments, radius);
+        progress += (nextProgress - previousProgress) * (previousRamp - nextRamp) * curveSampleSegments;
+        previousProgress = nextProgress;
+        previousRamp = nextRamp;
     }
     return progress;
 }
@@ -91,7 +98,8 @@ function intervalProgress(u) {
     const exit = 0.16;
     const area = 1 - (entry + exit) / 2;
     if (u < entry) return entry * integratedStep(u / entry) / area;
-    if (1 - u < exit) return 1 - exit * integratedStep((1 - u) / exit) / area;
+    const remaining = 1 - u;
+    if (remaining < exit) return 1 - exit * integratedStep(remaining / exit) / area;
     return (u - entry / 2) / area;
 }
 
@@ -125,103 +133,127 @@ function fadeBetween(from, to, progress) {
     return clamp(linear(amount, ordinaryOpacity, perceptualOpacity), low, high);
 }
 
-function fadeOpacity() {
-    if (numKeys < 2 || !Number.isInteger(startKey) || startKey < 0 || startKey >= numKeys) {
-        return value;
-    }
+function fadeSelectedPair(index) {
+    const first = key(index);
+    const last = key(index + 1);
+    const span = last.value - first.value;
+    if (span === 0 || time <= first.time || time >= last.time) return value;
 
-    if (startKey > 0 && numKeys > 2) {
-        const first = key(startKey);
-        const last = key(startKey + 1);
-        const span = last.value - first.value;
-        if (span === 0 || time <= first.time || time >= last.time) return value;
-        const u = remapExistingCurve
-            ? clamp((value - first.value) / span, 0, 1)
-            : linear(time, first.time, last.time, 0, 1);
-        return fadeBetween(first.value, last.value, intervalProgress(u));
-    }
+    const u = remapExistingCurve
+        ? normalizedOpacityProgress(value, first.value, span)
+        : linear(time, first.time, last.time, 0, 1);
+    return fadeBetween(first.value, last.value, intervalProgress(u));
+}
 
+// Leave one frame at the center of a hold when its duration allows it.
+function holdEdgeDuration(holdDuration, frame) {
+    return Math.max(0, (holdDuration - frame) / 2);
+}
+
+function fadeTrack(keyCount) {
     const frame = thisComp.frameDuration;
-    const layerStart = Math.min(thisLayer.inPoint, thisLayer.outPoint);
-    const layerEnd = Math.max(thisLayer.inPoint, thisLayer.outPoint);
+    const layerInPoint = thisLayer.inPoint;
+    const layerOutPoint = thisLayer.outPoint;
+    const layerStart = Math.min(layerInPoint, layerOutPoint);
+    const layerEnd = Math.max(layerInPoint, layerOutPoint);
     const epsilon = 1e-7;
     const timeTolerance = epsilon * frame;
     const visibleStart = Math.max(0, layerStart);
     const visibleEnd = Math.min(thisComp.duration, layerEnd);
     const firstVisible = Math.ceil(visibleStart / frame - epsilon) * frame;
+    // The composition end and the layer's trailing trim are exclusive.
     const lastVisible = (Math.ceil(visibleEnd / frame - epsilon) - 1) * frame;
     const hasVisibleFrame = firstVisible <= lastVisible;
     const hasRoomToFit = firstVisible < lastVisible;
 
     const keys = [];
-    for (let i = 1; i <= numKeys; i++) keys.push(key(i));
+    for (let i = 1; i <= keyCount; i++) keys.push(key(i));
 
     let result = keys[0].value;
     let hasFade = false;
-    let priorFadeEnd = keys[0].time;
-    let afterHold = -Infinity;
-    let beforeHold = Infinity;
-    let nextHold = 0;
+    let previousFadeEnd = keys[0].time;
+    let earliestFadeStart = -Infinity;
+    let latestFadeEnd = Infinity;
+    let nextHoldIndex = 0; // Right-hand key of the first equal-value pair ahead.
+
     for (let i = 1; i < keys.length; i++) {
         const first = keys[i - 1];
         const last = keys[i];
         const span = last.value - first.value;
         const duration = last.time - first.time;
-        if (span !== 0 && duration > 0) {
-            hasFade = true;
-            const radius = Math.hypot(0.18, 1.25 * frame / duration);
-            const begin = first.time - radius * duration;
-            const end = last.time + radius * duration;
 
-            // Fit visible transitions at a cut while retaining the smooth shape of each wing.
-            let left = hasRoomToFit && first.time >= visibleStart - timeTolerance && last.time > firstVisible
-                ? Math.max(begin, firstVisible) : begin;
-            let right = hasRoomToFit && last.time <= visibleEnd + timeTolerance && first.time < lastVisible
-                ? Math.min(end, lastVisible) : end;
-
-            // Keep the wings of wholly offscreen transitions on their side of the trim.
-            if (hasVisibleFrame && last.time <= firstVisible + timeTolerance) {
-                right = Math.min(right, firstVisible);
-            }
-            if (hasVisibleFrame && first.time >= lastVisible - timeTolerance) {
-                left = Math.max(left, lastVisible);
-            }
-
-            // Protect the middle of a hold from every fade in the adjacent groups.
-            if (first.time > priorFadeEnd) {
-                afterHold = first.time - Math.max(0, (first.time - priorFadeEnd - frame) / 2);
-            }
-            priorFadeEnd = last.time;
-            if (i >= nextHold) {
-                nextHold = i + 1;
-                while (nextHold < keys.length && keys[nextHold].value !== keys[nextHold - 1].value) nextHold++;
-                beforeHold = Infinity;
-                if (nextHold < keys.length) {
-                    const holdStart = keys[nextHold - 1];
-                    let j = nextHold;
-                    while (j + 1 < keys.length && keys[j + 1].value === holdStart.value) j++;
-                    beforeHold = holdStart.time + Math.max(0, (keys[j].time - holdStart.time - frame) / 2);
-                }
-            }
-            left = Math.max(left, afterHold);
-            right = Math.min(right, beforeHold);
-
-            if (time >= right || (right < end && time >= right - timeTolerance)) {
-                result = last.value;
-            } else if (time > left && (left === begin || time > left + timeTolerance) && right > left) {
-                const u = left === begin && right === end
-                    ? (time - first.time) / duration
-                    : linear(time, left, right, -radius, 1 + radius);
-                const progress = automaticProgress(u, radius, duration, first, span);
-                // A later overlapping fade blends from the current result toward its destination.
-                result = fadeBetween(result, last.value, progress);
-            }
-        } else if (remapExistingCurve && span === 0 && time > first.time && time < last.time && value !== first.value) {
+        if (span === 0) {
             // Equal keys can still contain an intentionally shaped Graph Editor excursion.
-            result = result === first.value ? value : clamp(result + value - first.value, 0, 100);
+            if (remapExistingCurve && time > first.time && time < last.time && value !== first.value) {
+                result = result === first.value ? value : clamp(result + value - first.value, 0, 100);
+            }
+            continue;
+        }
+        if (!(duration > 0)) continue;
+        hasFade = true;
+
+        const radius = Math.hypot(0.18, 1.25 * frame / duration);
+        const begin = first.time - radius * duration;
+        const end = last.time + radius * duration;
+
+        // Fit visible transitions to the first and last renderable frames at a cut.
+        let left = hasRoomToFit && first.time >= visibleStart - timeTolerance && last.time > firstVisible
+            ? Math.max(begin, firstVisible) : begin;
+        let right = hasRoomToFit && last.time <= visibleEnd + timeTolerance && first.time < lastVisible
+            ? Math.min(end, lastVisible) : end;
+
+        // Keep wholly offscreen fades on their own side of the trim.
+        if (hasVisibleFrame && last.time <= firstVisible + timeTolerance) {
+            right = Math.min(right, firstVisible);
+        }
+        if (hasVisibleFrame && first.time >= lastVisible - timeTolerance) {
+            left = Math.max(left, lastVisible);
+        }
+
+        // Reuse each hold's limits for every fade in the adjacent groups.
+        if (first.time > previousFadeEnd) {
+            earliestFadeStart = first.time - holdEdgeDuration(first.time - previousFadeEnd, frame);
+        }
+        previousFadeEnd = last.time;
+        if (i >= nextHoldIndex) {
+            nextHoldIndex = i + 1;
+            while (nextHoldIndex < keys.length && keys[nextHoldIndex].value !== keys[nextHoldIndex - 1].value) {
+                nextHoldIndex++;
+            }
+            latestFadeEnd = Infinity;
+            if (nextHoldIndex < keys.length) {
+                const holdStart = keys[nextHoldIndex - 1];
+                let holdEndIndex = nextHoldIndex;
+                while (holdEndIndex + 1 < keys.length && keys[holdEndIndex + 1].value === holdStart.value) {
+                    holdEndIndex++;
+                }
+                latestFadeEnd = holdStart.time + holdEdgeDuration(keys[holdEndIndex].time - holdStart.time, frame);
+            }
+        }
+        left = Math.max(left, earliestFadeStart);
+        right = Math.min(right, latestFadeEnd);
+
+        if (time >= right || (right < end && time >= right - timeTolerance)) {
+            result = last.value;
+        } else if (time > left && (left === begin || time > left + timeTolerance) && right > left) {
+            const u = left === begin && right === end
+                ? (time - first.time) / duration
+                : linear(time, left, right, -radius, 1 + radius);
+            const progress = automaticProgress(u, radius, first, duration, span);
+            // A later overlapping fade blends from the current result toward its destination.
+            result = fadeBetween(result, last.value, progress);
         }
     }
     return hasFade ? result : value;
+}
+
+function fadeOpacity() {
+    const keyCount = numKeys;
+    if (keyCount < 2 || !Number.isInteger(startKey) || startKey < 0 || startKey >= keyCount) {
+        return value;
+    }
+
+    return startKey > 0 && keyCount > 2 ? fadeSelectedPair(startKey) : fadeTrack(keyCount);
 }
 
 fadeOpacity();
@@ -238,7 +270,7 @@ fadeOpacity();
 
 ## From the C∞ dip to black to a multi-key fade
 
-The original dip used an infinitely flat ease at the endpoints of a single transition. Here an interior key can sit *inside* the motion. The expression samples each changing interval on a 24-segment grid, then rounds the sampled curve with a finite-width averaging kernel. The smoothing window scales with the interval’s duration and the comp’s frame duration.
+The original dip used an infinitely flat ease at the endpoints of a single transition. Here an interior key can sit *inside* the motion. With authored curve remapping enabled, whole-track mode samples each changing interval on a 24-segment grid, then rounds the sampled curve with a finite-width averaging kernel. The smoothing window scales with the interval’s duration and the comp’s frame duration.
 
 The kernel integrates the quintic curve `6x⁵ − 15x⁴ + 10x³`. Where the rounded ramp joins a flat hold or a straight ramp, its first three derivatives match (**C³**). C∞ describes the original easing design. The C³ statement applies specifically to these temporal joins. The expression uses After Effects’ `clamp()` and `linear()` for scalar bounds, interpolation, and time remapping.
 
@@ -253,6 +285,6 @@ For a black overlay, 75% Opacity transmits 25% of the underlying image light und
 
 ## Validation
 
-The current expression passed 36,036 sampled range checks and 67,478 comparisons against the previous version in a JavaScript model of the Opacity property. The model uses stand-ins for After Effects’ `clamp()` and `linear()`. The largest difference was 1.38 × 10⁻¹² opacity points. Targeted checks covered visible cuts, short pauses, overlapping fades, partial ranges, trims, and fractional frame rates. The four-key example above was measured in the same type of model.
+The current revision passed ECMAScript 2018 parsing and 300,538 exact Opacity comparisons against the previous revision across 139 fixtures. The offline JavaScript harness used two stand-ins for After Effects’ `linear()` and matched key indices, sample timestamps, and the order of property reads. It also caught deliberate changes to each of the four shipped defaults. The four-key example above was checked in a JavaScript model of the Opacity property.
 
-An earlier revision produced 814 native Opacity samples in After Effects 25.6.5. The current revision, which includes a fix for adjacent fades outside the visible trim and uses the built-in methods, has been verified offline. In-app validation is pending.
+An earlier revision produced 814 native Opacity samples in After Effects 25.6.5. In-app validation of the current revision is pending.
