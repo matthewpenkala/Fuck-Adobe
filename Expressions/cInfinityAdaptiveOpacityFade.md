@@ -42,7 +42,14 @@ const perceptualAmount = 0.65;    // 0 uses ordinary Opacity. 1 applies full CIE
 
 const luminanceToe = 216 / 24389;
 const lightnessSlope = 24389 / 27;
-const curveSampleSegments = 24;
+const coarseCurveSegments = 24;
+const fineCurveSegments = 2 * coarseCurveSegments;
+const earlyChordIndex = 16;
+const lateChordIndex = 40;
+// Even indices on the 48-segment grid are shared by both resolutions.
+const curveProbeIndices = [0, 2, 8, earlyChordIndex, 24, 32, lateChordIndex, 46, 48];
+const curveProbeOrder = [7, 1, 3, 5, 2, 6, 4];
+const curveErrorTolerance = 0.002; // 0.2% of normalized pair progress.
 
 // Integral of the quintic step 6x^5 - 15x^4 + 10x^3.
 function integratedStep(x) {
@@ -62,12 +69,33 @@ function normalizedOpacityProgress(opacity, firstOpacity, span) {
     return clamp((opacity - firstOpacity) / span, 0, 1);
 }
 
-function sampleAuthoredProgress(index, first, duration, span) {
+function sampleAuthoredProgress(index, first, duration, span, samples) {
     if (index === 0) return 0;
-    if (index === curveSampleSegments) return 1;
+    if (index === fineCurveSegments) return 1;
 
-    const opacity = valueAtTime(first.time + duration * index / curveSampleSegments);
-    return normalizedOpacityProgress(opacity, first.value, span);
+    if (samples[index] === undefined) {
+        const opacity = valueAtTime(first.time + duration * index / fineCurveSegments);
+        samples[index] = normalizedOpacityProgress(opacity, first.value, span);
+    }
+    return samples[index];
+}
+
+function chooseCurveSampleSegments(first, duration, span, samples) {
+    // Fixed probe times give the same grid throughout the pair. Check the Hold edge first.
+    for (const probe of curveProbeOrder) {
+        const a = curveProbeIndices[probe - 1];
+        const b = curveProbeIndices[probe];
+        const c = curveProbeIndices[probe + 1];
+        const left = sampleAuthoredProgress(a, first, duration, span, samples);
+        const middle = sampleAuthoredProgress(b, first, duration, span, samples);
+        const right = sampleAuthoredProgress(c, first, duration, span, samples);
+
+        // A quadratic through the probes estimates the midpoint error of a coarse cell.
+        // Its half-width is one fine-grid tick, so the error is the divided slope change.
+        const slopeChange = (right - middle) / (c - b) - (middle - left) / (b - a);
+        if (Math.abs(slopeChange) / (c - a) > curveErrorTolerance) return fineCurveSegments;
+    }
+    return coarseCurveSegments;
 }
 
 function automaticProgress(u, radius, first, duration, span) {
@@ -75,15 +103,34 @@ function automaticProgress(u, radius, first, duration, span) {
     if (u >= 1 + radius) return 1;
     if (!remapExistingCurve) return roundedRamp(u, radius) - roundedRamp(u - 1, radius);
 
-    // Approximate the authored curve with short ramps. Round only ramps in the kernel's reach.
+    // Share probe samples with the integration grid, then visit only ramps in the kernel's reach.
+    const samples = [];
+    // Two internal chord checks identify effectively linear pairs. The late read serves both paths.
+    if (Math.abs(sampleAuthoredProgress(lateChordIndex, first, duration, span, samples) - lateChordIndex / fineCurveSegments) <= 1e-6 &&
+        Math.abs(sampleAuthoredProgress(earlyChordIndex, first, duration, span, samples) - earlyChordIndex / fineCurveSegments) <= 1e-6) {
+        return roundedRamp(u, radius) - roundedRamp(u - 1, radius);
+    }
+    const curveSampleSegments = chooseCurveSampleSegments(first, duration, span, samples);
+    const stride = fineCurveSegments / curveSampleSegments;
     const firstSample = Math.max(0, Math.floor((u - radius) * curveSampleSegments));
     const lastSample = Math.min(curveSampleSegments, Math.ceil((u + radius) * curveSampleSegments));
-    let previousProgress = sampleAuthoredProgress(firstSample, first, duration, span);
+    let previousProgress = sampleAuthoredProgress(firstSample * stride, first, duration, span, samples);
     let progress = previousProgress;
     let previousRamp = roundedRamp(u - firstSample / curveSampleSegments, radius);
 
     for (let i = firstSample + 1; i <= lastSample; i++) {
-        const nextProgress = sampleAuthoredProgress(i, first, duration, span);
+        // A persistent plateau just before a large final change behaves like a step at the key.
+        // Apply the integrated kernel to that last increment only, leaving the earlier ramps intact.
+        if (i === fineCurveSegments && previousProgress <= 0.90 && previousProgress === samples[i - 2]) {
+            const probeTime = first.time + duration * (1 - 1 / 1024);
+            const lateProgress = normalizedOpacityProgress(valueAtTime(probeTime), first.value, span);
+            if (lateProgress === previousProgress) {
+                const x = clamp((u - 1 + radius) / (2 * radius), 0, 1);
+                const step = x * x * x * (10 + x * (-15 + 6 * x));
+                return progress + (1 - previousProgress) * step;
+            }
+        }
+        const nextProgress = sampleAuthoredProgress(i * stride, first, duration, span, samples);
         const nextRamp = roundedRamp(u - i / curveSampleSegments, radius);
         progress += (nextProgress - previousProgress) * (previousRamp - nextRamp) * curveSampleSegments;
         previousProgress = nextProgress;
@@ -270,7 +317,11 @@ fadeOpacity();
 
 ## From the C∞ dip to black to a multi-key fade
 
-The original dip used an infinitely flat ease at the endpoints of a single transition. Here an interior key can sit *inside* the motion. With authored curve remapping enabled, whole-track mode samples each changing interval on a 24-segment grid, then rounds the sampled curve with a finite-width averaging kernel. The smoothing window scales with the interval’s duration and the comp’s frame duration.
+The original dip used an infinitely flat ease at the endpoints of a single transition. Here an interior key can sit *inside* the motion. A finite-width averaging kernel rounds each sampled interval. Its width scales with the interval’s duration and the comp’s frame duration.
+
+With authored curve remapping enabled in whole-track mode, Afterglow checks the authored values at one-third and five-sixths of each changing pair. If both land on the straight line between the keys within a small tolerance, Afterglow smooths the straight ramp directly. For other curves, it chooses a uniform grid of 24 or 48 segments. It uses up to seven fixed samples near the keys and through the middle to estimate the midpoint interpolation error of the 24-segment grid. It switches to 48 when that estimate exceeds 0.2% of normalized progress. Probe times depend on the keyframe pair. The grid stays consistent as you scrub, and the smoothing reuses probes that fall in its window. Sparse probes can miss sharp details between samples.
+
+When the fine grid finds a large jump after a plateau, it checks once more just before the destination key. If the plateau persists there, Afterglow smooths the final increment as a step centered on the key. Earlier parts of that pair still follow the sampled curve.
 
 The kernel integrates the quintic curve `6x⁵ − 15x⁴ + 10x³`. Where the rounded ramp joins a flat hold or a straight ramp, its first three derivatives match (**C³**). C∞ describes the original easing design. The C³ statement applies specifically to these temporal joins. The expression uses After Effects’ `clamp()` and `linear()` for scalar bounds, interpolation, and time remapping.
 
@@ -281,10 +332,14 @@ For a black overlay, 75% Opacity transmits 25% of the underlying image light und
 - **Cuts and trims.** If the smoothing would run past a cut, the expression fits it into the available frames. A destination keyed exactly at the composition’s exclusive end can land on the last visible frame. Trimming through the middle of an existing fade can leave a partial value at the cut.
 - **Level stretches and Hold keys.** Two equal-valued keys give adjacent fades room to settle and restart while protecting the center of the pause. A Hold key that jumps to a *different* value is a different case. Whole-track smoothing rounds that jump. Use ordinary keyframes without this expression for a frame-exact hard cut.
 - **Peaks and reversals.** When fades overlap, the next fade starts from the current result. A fast reversal can turn around short of the keyed peak. Give it a flat stretch if the shot must dwell there. Sampled progress on a changing pair is bounded by that pair’s values, so a Bézier overshoot can be lost.
-- **Dense animation.** Whole-track mode walks the keys at each evaluation. The intended use is a track of authored fades. A property with a baked key on every frame can cost more to evaluate.
+- **Dense animation.** Whole-track mode walks the keys at each evaluation and probes active authored curves. The intended use is a track of authored fades. A property with a baked key on every frame can cost more to evaluate.
 
 ## Validation
 
-The current revision passed ECMAScript 2018 parsing and 300,538 exact Opacity comparisons against the previous revision across 139 fixtures. The offline JavaScript harness used two stand-ins for After Effects’ `linear()` and matched key indices, sample timestamps, and the order of property reads. It also caught deliberate changes to each of the four shipped defaults. The four-key example above was checked in a JavaScript model of the Opacity property.
+The exact expression above was tested in After Effects 2025 (25.6.5) at 1,050 times across five Opacity fixtures. The cases covered linear, asymmetric and centered Bézier, changing Hold, and a four-key fade with exact values at the cuts and during the middle hold.
 
-An earlier revision produced 814 native Opacity samples in After Effects 25.6.5. In-app validation of the current revision is pending.
+Against a native 2,048-segment reference, peak error on the strong centered Bézier fell from 0.605 to 0.135 opacity points compared with fixed 24. On the changing Hold, peak error fell from 6.394 points with fixed 48 to less than 0.001 against the analytic smoothed step.
+
+Across eight rotated native timing batches, the linear fixture’s median for 65 property evaluations fell from 40.4 ms with the first adaptive sampler to 23.0 ms with the final expression. Strong Bézier curves still take more time to evaluate than fixed 24. These timings measure Opacity property evaluation in the test project.
+
+ECMAScript 2018 parsing passed. An offline benchmark compared 5,105 times across 14 fixtures, including subframe keys, trims, and overlapping fades. It also passed 17,941 exact comparisons on paths that bypass adaptive sampling.
