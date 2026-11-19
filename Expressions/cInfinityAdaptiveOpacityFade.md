@@ -43,14 +43,6 @@ const perceptualAmount = 0.65;    // 0 uses ordinary Opacity. 1 applies full CIE
 const luminanceToe = 216 / 24389;
 const lightnessSlope = 24389 / 27;
 
-function clamp01(x) {
-    return Math.max(0, Math.min(1, x));
-}
-
-function mix(a, b, weight) {
-    return a + (b - a) * weight;
-}
-
 // Integral of the quintic step 6x^5 - 15x^4 + 10x^3.
 function integratedStep(x) {
     const x2 = x * x;
@@ -77,7 +69,7 @@ function automaticProgress(u, radius, duration, first, opacitySpan) {
         if (index === 0) return 0;
         if (index === segments) return 1;
         const authored = valueAtTime(first.time + duration * index / segments);
-        return clamp01((authored - first.value) / opacitySpan);
+        return clamp((authored - first.value) / opacitySpan, 0, 1);
     }
 
     let previous = sample(left);
@@ -117,20 +109,20 @@ function fadeBetween(from, to, progress) {
     if (progress <= 0) return from;
     if (progress >= 1) return to;
 
-    const ordinaryOpacity = mix(from, to, progress);
+    const ordinaryOpacity = linear(progress, from, to);
     const blackSolid = model === "blackSolid";
-    const amount = clamp01(perceptualAmount);
+    const amount = clamp(perceptualAmount, 0, 1);
     if (amount === 0 || (!blackSolid && model !== "footageOverBlack")) return ordinaryOpacity;
 
     // In Normal linear-light blending, the visible light under a black solid is 1 - alpha.
     const y0 = blackSolid ? 1 - from / 100 : from / 100;
     const y1 = blackSolid ? 1 - to / 100 : to / 100;
-    const lightness = mix(luminanceToLightness(y0), luminanceToLightness(y1), progress);
-    const luminance = clamp01(lightnessToLuminance(lightness));
+    const lightness = linear(progress, luminanceToLightness(y0), luminanceToLightness(y1));
+    const luminance = clamp(lightnessToLuminance(lightness), 0, 1);
     const perceptualOpacity = 100 * (blackSolid ? 1 - luminance : luminance);
     const low = Math.min(from, to);
     const high = Math.max(from, to);
-    return Math.max(low, Math.min(high, mix(ordinaryOpacity, perceptualOpacity, amount)));
+    return clamp(linear(amount, ordinaryOpacity, perceptualOpacity), low, high);
 }
 
 function fadeOpacity() {
@@ -143,8 +135,10 @@ function fadeOpacity() {
         const last = key(startKey + 1);
         const span = last.value - first.value;
         if (span === 0 || time <= first.time || time >= last.time) return value;
-        const u = remapExistingCurve ? (value - first.value) / span : (time - first.time) / (last.time - first.time);
-        return fadeBetween(first.value, last.value, intervalProgress(clamp01(u)));
+        const u = remapExistingCurve
+            ? clamp((value - first.value) / span, 0, 1)
+            : linear(time, first.time, last.time, 0, 1);
+        return fadeBetween(first.value, last.value, intervalProgress(u));
     }
 
     const frame = thisComp.frameDuration;
@@ -217,14 +211,14 @@ function fadeOpacity() {
             } else if (time > left && (left === begin || time > left + timeTolerance) && right > left) {
                 const u = left === begin && right === end
                     ? (time - first.time) / duration
-                    : mix(-radius, 1 + radius, (time - left) / (right - left));
+                    : linear(time, left, right, -radius, 1 + radius);
                 const progress = automaticProgress(u, radius, duration, first, span);
                 // A later overlapping fade blends from the current result toward its destination.
                 result = fadeBetween(result, last.value, progress);
             }
         } else if (remapExistingCurve && span === 0 && time > first.time && time < last.time && value !== first.value) {
             // Equal keys can still contain an intentionally shaped Graph Editor excursion.
-            result = result === first.value ? value : 100 * clamp01((result + value - first.value) / 100);
+            result = result === first.value ? value : clamp(result + value - first.value, 0, 100);
         }
     }
     return hasFade ? result : value;
@@ -246,7 +240,7 @@ fadeOpacity();
 
 The original dip used an infinitely flat ease at the endpoints of a single transition. Here an interior key can sit *inside* the motion. The expression samples each changing interval on a 24-segment grid, then rounds the sampled curve with a finite-width averaging kernel. The smoothing window scales with the interval’s duration and the comp’s frame duration.
 
-The kernel integrates the quintic curve `6x⁵ − 15x⁴ + 10x³`. Where the rounded ramp joins a flat hold or a straight ramp, its first three derivatives match (**C³**). C∞ describes the original easing design. The C³ statement applies specifically to these temporal joins.
+The kernel integrates the quintic curve `6x⁵ − 15x⁴ + 10x³`. Where the rounded ramp joins a flat hold or a straight ramp, its first three derivatives match (**C³**). C∞ describes the original easing design. The C³ statement applies specifically to these temporal joins. The expression uses After Effects’ `clamp()` and `linear()` for scalar bounds, interpolation, and time remapping.
 
 For a black overlay, 75% Opacity transmits 25% of the underlying image light under Normal blending in linear light. The expression uses that relationship at both keyed endpoints, including partial fades such as 20% → 70%. The lightness adjustment assumes linear-light compositing and uses no footage samples. Choose `"opacity"` if you want only the timing change.
 
@@ -259,6 +253,6 @@ For a black overlay, 75% Opacity transmits 25% of the underlying image light und
 
 ## Validation
 
-The published expression passed 36,036 sampled range checks in a JavaScript model of the Opacity property, plus targeted checks for cut frames, short pauses, overlapping fades, partial ranges, trims and fractional frame rates. The four-key example above was measured from this expression in the same type of model.
+The current expression passed 36,036 sampled range checks and 67,478 comparisons against the previous version in a JavaScript model of the Opacity property. The model uses stand-ins for After Effects’ `clamp()` and `linear()`. The largest difference was 1.38 × 10⁻¹² opacity points. Targeted checks covered visible cuts, short pauses, overlapping fades, partial ranges, trims, and fractional frame rates. The four-key example above was measured in the same type of model.
 
-An earlier revision produced 814 native Opacity samples in After Effects 25.6.5. This revision adds a trim fix that keeps adjacent offscreen fades from moving a keyed cut endpoint. The new trim cases passed in JavaScript. An active After Effects session prevented a fresh native run of this revision.
+An earlier revision produced 814 native Opacity samples in After Effects 25.6.5. The current revision, which includes a fix for adjacent fades outside the visible trim and uses the built-in methods, has been verified offline. In-app validation is pending.
