@@ -12,6 +12,7 @@ Mostly [After Effects expressions](./Expressions). A few of them:
 - **[Looping Wiggle](./Expressions/loopWiggle.md)**: make a wiggle loop seamlessly.
 - **[CC Lens Normalization](./Expressions/ccLensPerceptualNormalize.md)**: make changes to CC Lens Size feel more even, especially near zero.
 - **[Twixtor Finite Stop](./Expressions/twixtorSpeedFiniteStop.md)**: ease Twixtor into and out of a freeze, with less of the slow crawl at the end.
+- **[C∞ Afterglow - Adaptive Opacity Fade](./Expressions/cInfinityAdaptiveOpacityFade.md)** lets one black solid fade a shot in and out, hold it clear in the middle, and land on black at the cut.
 
 Setup and caveats are in each file.
 
